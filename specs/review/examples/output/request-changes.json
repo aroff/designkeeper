@@ -1,0 +1,131 @@
+{
+  "summary": {
+    "verdict": "request_changes",
+    "overall_score": 5,
+    "one_paragraph": "Retry logic is useful but mixed with HTTP handling in one type, lacks concurrency tests, and the CL description omits idempotency requirements. Address blockers before merge."
+  },
+  "grades": {
+    "overall_code_health": {
+      "score": 5,
+      "rationale": "Improves retries but increases coupling in OrderProcessor."
+    },
+    "cl_description": {
+      "score": 4,
+      "rationale": "Title is clear; body does not mention idempotency or worker pool impact."
+    },
+    "change_scope": {
+      "score": 6,
+      "rationale": "Mostly one feature but includes unrelated logging refactor."
+    },
+    "design": {
+      "score": 5,
+      "rationale": "Processor owns HTTP client, retry, and persistence."
+    },
+    "functionality": {
+      "score": 5,
+      "rationale": "Race possible when two workers retry the same order id."
+    },
+    "complexity": {
+      "score": 4,
+      "rationale": "process() exceeds 120 lines with nested error branches."
+    },
+    "tests": {
+      "score": 4,
+      "rationale": "Happy path only; no concurrent retry or exhaustion cases."
+    },
+    "naming": {
+      "score": 7,
+      "rationale": "Names are clear despite large type."
+    },
+    "comments": {
+      "score": 6,
+      "rationale": "Sparse on why idempotency is required."
+    },
+    "style": {
+      "score": 8,
+      "rationale": "Formatting matches the crate."
+    },
+    "consistency": {
+      "score": 7,
+      "rationale": "Logging refactor matches project logger."
+    },
+    "documentation": {
+      "score": 3,
+      "rationale": "README not updated for new retry semantics."
+    },
+    "context_and_review_depth": {
+      "score": 5,
+      "rationale": "Logging change in same file obscures retry diff."
+    }
+  },
+  "overall_score": 5,
+  "good_things": [
+    "Exponential backoff parameters are centralized in RetryPolicy."
+  ],
+  "findings": [
+    {
+      "id": "design-001",
+      "dimension": "design",
+      "severity": "blocker",
+      "location": "src/ordering/processor.rs:12-180",
+      "observation": "OrderProcessor constructs reqwest::Client, runs retry loops, and calls SqlStore in one type.",
+      "why_it_matters": "Mixed responsibilities make failure modes hard to reason about and violate ordering boundary in docs/adr/0001-ordering-boundaries.md.",
+      "recommended_action": "Extract HttpClient and RetryExecutor; keep OrderProcessor as orchestration only.",
+      "evidence": "struct OrderProcessor { client: Client, store: SqlStore, policy: RetryPolicy }"
+    },
+    {
+      "id": "functionality-001",
+      "dimension": "functionality",
+      "severity": "blocker",
+      "location": "src/ordering/processor.rs:98-112",
+      "observation": "Two concurrent `process(order_id)` calls can both pass the pre-check and double-charge without a row lock.",
+      "why_it_matters": "Parallel retries can introduce duplicate side effects under load.",
+      "recommended_action": "Use transactional idempotency key or SELECT FOR UPDATE before side effects; add test with two concurrent tasks."
+    },
+    {
+      "id": "tests-001",
+      "dimension": "tests",
+      "severity": "major",
+      "location": "src/ordering/processor_test.rs",
+      "observation": "Only `test_process_success` exists; no failure or concurrency coverage.",
+      "why_it_matters": "Tests must fail when retry or race regressions are introduced.",
+      "recommended_action": "Add tests: transient error then success, max attempts exceeded, concurrent duplicate process."
+    },
+    {
+      "id": "cl-description-001",
+      "dimension": "cl_description",
+      "severity": "major",
+      "location": "PR description",
+      "observation": "Body describes backoff timings but not idempotency or worker pool constraints.",
+      "why_it_matters": "Future readers cannot judge whether duplicate charge risk was accepted.",
+      "recommended_action": "Add a 'Risks / idempotency' section listing required keys and DB locking approach."
+    },
+    {
+      "id": "change-scope-001",
+      "dimension": "change_scope",
+      "severity": "minor",
+      "location": "src/ordering/processor.rs:200-240",
+      "observation": "Structured logging refactor in the same file as retry logic.",
+      "why_it_matters": "Mixed concerns slow review and increase merge conflict risk (small-cls.md).",
+      "recommended_action": "Move logging refactor to a separate CL or revert it from this change."
+    },
+    {
+      "id": "documentation-001",
+      "dimension": "documentation",
+      "severity": "major",
+      "location": "README.md",
+      "observation": "README still documents immediate-fail behavior for order processing.",
+      "why_it_matters": "Operators will misconfigure timeouts when behavior changes.",
+      "recommended_action": "Update README 'Order processing' with retry bounds and idempotency requirements."
+    }
+  ],
+  "limitations": [
+    "Did not execute load test; concurrency finding from static analysis."
+  ],
+  "suggested_next_steps": [
+    "Split logging refactor into its own CL.",
+    "Extract HTTP and retry collaborators; shrink OrderProcessor.",
+    "Add idempotency or locking and concurrent tests.",
+    "Expand PR description and README."
+  ]
+}
