@@ -1,0 +1,23 @@
+[package]
+name = "dk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "DesignKeeper CLI — structured, agent-driven code review."
+
+[[bin]]
+name = "dk"
+path = "src/main.rs"
+
+[dependencies]
+dk-core = { path = "../dk-core" }
+cli-framework = { path = "../../../cli-framework" }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+anyhow = "1"
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
