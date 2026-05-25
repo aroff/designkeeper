@@ -15,6 +15,7 @@
 pub mod check;
 pub mod config;
 pub mod discovery;
+pub mod init;
 pub mod pack;
 pub mod pipeline;
 pub mod review;
@@ -26,6 +27,7 @@ pub use config::{
     default_config, resolve_config, AgentConfig, ConfigError, DkConfig, OutputConfig, OutputFormat,
     ScanConfig, TemplatesConfig,
 };
+pub use init::{run_init, InitError, InitOutcome, InitParams, PackSource};
 pub use pipeline::{validate_json, AgentRunner, Pipeline, PipelineError};
 pub use review::{
     run_review, run_review_with_agent, ChangeContext, Dimension, Finding, FocusArea, GradeEntry,

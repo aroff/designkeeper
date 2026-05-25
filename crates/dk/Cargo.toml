@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 dk-core = { path = "../dk-core" }
-cli-framework = { path = "../../../cli-framework" }
+cli-framework = { path = "../../../cli-framework", features = ["doctor", "mcp-server"] }
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }

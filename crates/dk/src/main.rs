@@ -4,15 +4,21 @@
 //! [`dk_core::ReviewInput`], and routes output. All domain logic lives in
 //! `dk-core`; this crate only parses arguments and formats I/O.
 
+mod doctor;
+
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::sync::Arc;
 
+use cli_framework::doctor::DoctorModule;
+use cli_framework::mcp::McpToolExportPolicy;
 use cli_framework::prelude::*;
 use cli_framework::spec::arg_spec::{ArgKind, ArgValueType, Cardinality};
 
-use dk_core::config::{resolve_config, DkConfig, OutputFormat};
+use dk_core::config::{default_config, resolve_config, DkConfig, OutputFormat};
 use dk_core::{pack, review, run_check, ReviewInput, ReviewOptions};
+use dk_core::{run_init, InitParams};
 use dk_core::{ChangeContext, FocusArea};
 
 struct DkContext;
@@ -30,8 +36,13 @@ async fn main() -> anyhow::Result<()> {
 
     let app = AppBuilder::new()
         .with_version("dk", env!("CARGO_PKG_VERSION"))
+        // Only commands flagged `expose_mcp` are surfaced as MCP tools by
+        // the auto-registered `mcp serve`. Keeps `init`/`doctor` CLI-only.
+        .with_mcp_export_policy(McpToolExportPolicy::ExposeMcpOnly)
         .register_command(review_command())?
         .register_command(check_command())?
+        .register_command(init_command())?
+        .register_module(DoctorModule::new(doctor::checks()))?
         .build(DkContext)?;
     let mut app = app;
     app.run().await
@@ -114,7 +125,7 @@ fn review_command() -> Command {
         category: Some("analysis"),
         spec: Some(Arc::new(spec)),
         validator: None,
-        expose_mcp: false,
+        expose_mcp: true,
         execute: Arc::new(|_ctx, args| Box::pin(async move { run_review_cmd(args) })),
     }
 }
@@ -148,6 +159,33 @@ fn check_command() -> Command {
         validator: None,
         expose_mcp: false,
         execute: Arc::new(|_ctx, args| Box::pin(async move { run_check_cmd(args) })),
+    }
+}
+
+fn init_command() -> Command {
+    let args = vec![
+        opt("agent", Some('a'), "Default agent key (e.g. claude, codex)"),
+        opt("model", Some('m'), "Default model override (optional)"),
+        opt(
+            "template-pack",
+            None,
+            "Template pack source: 'default', a local folder, or a URL",
+        ),
+    ];
+    let spec = CommandSpec {
+        summary: "Scaffold .dk/ and write dk.toml (interactive when flags are omitted)",
+        args,
+        ..Default::default()
+    };
+    Command {
+        id: "init",
+        summary: "Scaffold .dk/ and write dk.toml",
+        syntax: Some("init [--agent <a>] [--model <m>] [--template-pack <url-or-folder>]"),
+        category: Some("setup"),
+        spec: Some(Arc::new(spec)),
+        validator: None,
+        expose_mcp: false,
+        execute: Arc::new(|_ctx, args| Box::pin(async move { run_init_cmd(args) })),
     }
 }
 
@@ -250,6 +288,69 @@ fn run_check_cmd(args: CommandArgs) -> anyhow::Result<()> {
         eprintln!("{summary}");
     }
     exit(if result.passed { 0 } else { 1 });
+}
+
+fn run_init_cmd(args: CommandArgs) -> anyhow::Result<()> {
+    let cwd = current_dir();
+    // Seed defaults from an existing dk.toml so re-running is iterative. A
+    // malformed file falls back to built-in defaults rather than blocking init.
+    let existing = resolve_config(&cwd).unwrap_or_else(|_| default_config());
+
+    let agent = prompt_or_default(args.named.get("agent"), "Agent", &existing.agent.agent);
+    let model_default = existing.agent.model.as_deref().unwrap_or("");
+    let model_raw = prompt_or_default(args.named.get("model"), "Model (blank for none)", model_default);
+    let model = Some(model_raw).filter(|m| !m.trim().is_empty());
+    let pack = prompt_or_default(
+        args.named.get("template-pack"),
+        "Template pack",
+        &existing.templates.pack,
+    );
+
+    let params = InitParams { agent, model, pack };
+    let outcome = match run_init(&cwd, &params) {
+        Ok(o) => o,
+        Err(e) => fail(e.code(), &e.to_string()),
+    };
+
+    let verb = if outcome.updated_existing {
+        "Updated"
+    } else {
+        "Created"
+    };
+    println!("{verb} {}", outcome.config_path.display());
+    match &outcome.pack_source {
+        dk_core::PackSource::Embedded => {
+            println!("Installed default template pack at {}", outcome.dk_dir.display());
+        }
+        dk_core::PackSource::LocalDir(src) => {
+            println!(
+                "Copied template pack from {} to {}",
+                src.display(),
+                outcome.dk_dir.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Resolve a parameter from a CLI flag, an interactive prompt (TTY only), or
+/// the supplied default. Non-interactive invocations silently take the default.
+fn prompt_or_default(flag: Option<&String>, label: &str, default: &str) -> String {
+    if let Some(value) = flag {
+        return value.clone();
+    }
+    if io::stdin().is_terminal() {
+        print!("{label} [{default}]: ");
+        let _ = io::stdout().flush();
+        let mut line = String::new();
+        if io::stdin().read_line(&mut line).is_ok() {
+            let trimmed = line.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    }
+    default.to_string()
 }
 
 // ---------------------------------------------------------------------------
