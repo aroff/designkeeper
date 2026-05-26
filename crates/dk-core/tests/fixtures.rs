@@ -140,22 +140,38 @@ fn end_to_end_run_review_with_recorded_response() {
 }
 
 #[test]
-fn run_review_rejects_score_mismatch() {
+fn run_review_reconciles_score_mismatch() {
     let (pack_dir, wd) = pack_and_workdir();
-    // Take valid output, then corrupt top-level overall_score so V1 fails.
+    // Take valid output, then corrupt top-level overall_score so V1 diverges.
     let mut value = read_json("examples/output/approve.json");
     value["overall_score"] = serde_json::json!(2.0);
     let raw = format!("```json\n{value}\n```");
     let agent = RecordedAgent(raw);
-    let err = review::run_review_with_agent(
+    let output = review::run_review_with_agent(
         input_for(wd.path()),
         &default_config(),
         pack_dir.path(),
         &agent,
         &|_| {},
     )
-    .unwrap_err();
-    assert_eq!(err.code(), "DK_SCORE_MISMATCH");
+    .expect("reconciliation should not fail — score mismatch is now auto-reconciled");
+    // Both scores must be equal after reconciliation.
+    assert!(
+        (output.summary.overall_score - output.overall_score).abs() < 1e-9,
+        "scores must match after reconciliation: summary={} top_level={}",
+        output.summary.overall_score,
+        output.overall_score
+    );
+    // Canonical score is the rounded mean of scored grade entries.
+    let scored: Vec<f64> = output.grades.values().filter_map(|g| g.score()).collect();
+    assert!(!scored.is_empty());
+    let expected = (scored.iter().sum::<f64>() / scored.len() as f64 * 10.0).round() / 10.0;
+    assert!(
+        (output.summary.overall_score - expected).abs() < 0.01,
+        "reconciled score {:.1} should be close to mean {:.1}",
+        output.summary.overall_score,
+        expected
+    );
 }
 
 #[test]
@@ -165,8 +181,9 @@ fn run_review_input_validation_error() {
     // Empty target violates minLength: 1 in the input schema.
     input.target = Some(String::new());
     let agent = RecordedAgent("unused".to_string());
-    let err = review::run_review_with_agent(input, &default_config(), pack_dir.path(), &agent, &|_| {})
-        .unwrap_err();
+    let err =
+        review::run_review_with_agent(input, &default_config(), pack_dir.path(), &agent, &|_| {})
+            .unwrap_err();
     assert_eq!(err.code(), "DK_INPUT_VALIDATION");
 }
 

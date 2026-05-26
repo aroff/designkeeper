@@ -36,6 +36,10 @@ pub fn run_check(
     let agent = crate::pipeline::SubprocessAgent {
         agent: config.agent.agent.clone(),
         model: config.agent.model.clone(),
+        timeout: config
+            .agent
+            .timeout_secs
+            .map(std::time::Duration::from_secs),
     };
     run_check_with_agent(input, config, template_dir, verbose, &agent, progress)
 }

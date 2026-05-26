@@ -180,6 +180,25 @@ impl Dimension {
             Dimension::ContextAndReviewDepth => "context_and_review_depth",
         }
     }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "overall_code_health" => Some(Self::OverallCodeHealth),
+            "cl_description" => Some(Self::ClDescription),
+            "change_scope" => Some(Self::ChangeScope),
+            "design" => Some(Self::Design),
+            "functionality" => Some(Self::Functionality),
+            "complexity" => Some(Self::Complexity),
+            "tests" => Some(Self::Tests),
+            "naming" => Some(Self::Naming),
+            "comments" => Some(Self::Comments),
+            "style" => Some(Self::Style),
+            "consistency" => Some(Self::Consistency),
+            "documentation" => Some(Self::Documentation),
+            "context_and_review_depth" => Some(Self::ContextAndReviewDepth),
+            _ => None,
+        }
+    }
 }
 
 /// Declaration order is significant: it defines severity ranking (blockers
@@ -285,6 +304,8 @@ pub struct Finding {
     pub recommended_action: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub evidence: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub suggested_patch: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -301,11 +322,6 @@ pub enum ReviewError {
     Config(#[from] crate::config::ConfigError),
     #[error(transparent)]
     Pipeline(#[from] PipelineError),
-    #[error("score mismatch: summary.overall_score={summary_score} top-level overall_score={top_level_score}")]
-    ScoreMismatch {
-        summary_score: f64,
-        top_level_score: f64,
-    },
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -317,7 +333,6 @@ impl ReviewError {
             ReviewError::WorkingDirInvalid { .. } => "DK_WORKING_DIR_INVALID",
             ReviewError::Config(c) => c.code(),
             ReviewError::Pipeline(p) => p.code(),
-            ReviewError::ScoreMismatch { .. } => "DK_SCORE_MISMATCH",
             ReviewError::Io(_) => "DK_IO_ERROR",
         }
     }
@@ -337,6 +352,10 @@ pub fn run_review(
     let agent = crate::pipeline::SubprocessAgent {
         agent: config.agent.agent.clone(),
         model: config.agent.model.clone(),
+        timeout: config
+            .agent
+            .timeout_secs
+            .map(std::time::Duration::from_secs),
     };
     run_review_with_agent(input, config, template_dir, &agent, progress)
 }
@@ -374,7 +393,8 @@ pub fn run_review_with_agent(
     // 4. Run the structured pipeline (render -> agent -> extract + validate, retry).
     let renderer = DefaultRenderer;
     let validator = JsonResponseValidator;
-    let pipeline = Pipeline::new(&renderer, agent, &validator);
+    let mut pipeline = Pipeline::new(&renderer, agent, &validator);
+    pipeline.max_retries = config.agent.max_retries.unwrap_or(2);
     let value = pipeline.run(
         &prompt_template,
         &prompt_slots,
@@ -384,23 +404,37 @@ pub fn run_review_with_agent(
     )?;
 
     // The pipeline already schema-validated; deserialize into the typed output.
-    let output: ReviewOutput =
+    let mut output: ReviewOutput =
         serde_json::from_value(value).map_err(|e| PipelineError::JsonParse {
             message: e.to_string(),
         })?;
 
-    // 5. Post-validation. V1 is a hard error; V2-V4 are warnings.
-    if (output.summary.overall_score - output.overall_score).abs() > SCORE_TOLERANCE {
-        return Err(ReviewError::ScoreMismatch {
-            summary_score: output.summary.overall_score,
-            top_level_score: output.overall_score,
-        });
-    }
+    // 5. Post-validation. V1: auto-reconcile score mismatch; V2-V4 are warnings.
+    reconcile_scores(&mut output);
     for warning in validation::validate_output(&output) {
         tracing::warn!(rule = %warning.rule, "{}", warning.message);
     }
 
     Ok(output)
+}
+
+fn reconcile_scores(output: &mut ReviewOutput) {
+    if (output.summary.overall_score - output.overall_score).abs() > SCORE_TOLERANCE {
+        let scored: Vec<f64> = output.grades.values().filter_map(|g| g.score()).collect();
+        let canonical = if scored.is_empty() {
+            output.overall_score
+        } else {
+            (scored.iter().sum::<f64>() / scored.len() as f64 * 10.0).round() / 10.0
+        };
+        tracing::warn!(
+            rule = "V1",
+            "score reconciled: summary={} top_level={} → {canonical}",
+            output.summary.overall_score,
+            output.overall_score
+        );
+        output.summary.overall_score = canonical;
+        output.overall_score = canonical;
+    }
 }
 
 /// Render the markdown report for a validated review output.

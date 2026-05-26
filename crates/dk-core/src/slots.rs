@@ -8,7 +8,7 @@ use crate::discovery;
 use crate::pack;
 use crate::review::{ReviewInput, ReviewOutput};
 
-/// Build the 8 required prompt-template slots (spec §4.4).
+/// Build the 9 required prompt-template slots (spec §4.4).
 pub fn build_prompt_slots(
     input: &ReviewInput,
     config: &DkConfig,
@@ -46,6 +46,10 @@ pub fn build_prompt_slots(
         input.options.max_findings.to_string(),
     );
     slots.insert("output_schema".to_string(), output_schema);
+    slots.insert(
+        "dimensions_filter".to_string(),
+        format_dimensions_filter(input),
+    );
     Ok(slots)
 }
 
@@ -149,6 +153,20 @@ fn format_project_hints(input: &ReviewInput) -> String {
     lines.join("\n")
 }
 
+fn format_dimensions_filter(input: &ReviewInput) -> String {
+    match &input.options.include_dimensions {
+        Some(dims) if !dims.is_empty() => {
+            let list = dims
+                .iter()
+                .map(|d| d.as_key())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("Grade ONLY these dimensions: {list}; mark all others not_evaluated.")
+        }
+        _ => "Grade every in-scope dimension.".to_string(),
+    }
+}
+
 fn read_or_default(path: &Path, fallback: &str) -> Result<String, std::io::Error> {
     match std::fs::read_to_string(path) {
         Ok(s) => Ok(s),
@@ -195,13 +213,17 @@ fn format_findings(output: &ReviewOutput) -> String {
     findings
         .iter()
         .map(|f| {
-            format!(
+            let mut s = format!(
                 "- [{}] {}: {} ({})",
                 f.severity.as_key(),
                 f.id,
                 f.observation,
                 f.location
-            )
+            );
+            if let Some(patch) = &f.suggested_patch {
+                s.push_str(&format!("\n  ```suggestion\n  {patch}\n  ```"));
+            }
+            s
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -249,7 +271,7 @@ mod tests {
     }
 
     #[test]
-    fn builds_all_eight_prompt_slots() {
+    fn builds_all_nine_prompt_slots() {
         let dir = tempdir().unwrap();
         pack::write_default_pack(dir.path()).unwrap();
         let wd = tempdir().unwrap();
@@ -268,6 +290,7 @@ mod tests {
             "methodology",
             "max_findings",
             "output_schema",
+            "dimensions_filter",
         ] {
             assert!(slots.contains_key(key), "missing slot {key}");
         }
@@ -279,6 +302,11 @@ mod tests {
         // output_schema is minified JSON (no newlines).
         assert!(!slots["output_schema"].contains('\n'));
         assert!(slots["output_schema"].contains("\"verdict\""));
+        // dimensions_filter defaults to grading everything.
+        assert_eq!(
+            slots["dimensions_filter"],
+            "Grade every in-scope dimension."
+        );
     }
 
     #[test]
