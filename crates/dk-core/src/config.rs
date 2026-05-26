@@ -51,6 +51,8 @@ impl OutputFormat {
 pub struct AgentConfig {
     pub agent: String,
     pub model: Option<String>,
+    pub timeout_secs: Option<u64>,
+    pub max_retries: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,6 +91,8 @@ pub fn default_config() -> DkConfig {
         agent: AgentConfig {
             agent: "claude".to_string(),
             model: None,
+            timeout_secs: None,
+            max_retries: None,
         },
         templates: TemplatesConfig {
             pack: "default".to_string(),
@@ -148,6 +152,8 @@ struct RawOutput {
 struct RawAgent {
     agent: Option<String>,
     model: Option<String>,
+    timeout_secs: Option<u64>,
+    max_retries: Option<u32>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -180,6 +186,8 @@ impl RawConfig {
             }
             // Treat an empty model string as "unset" (CONTEXT.md uses model = "").
             cfg.agent.model = agent.model.filter(|m| !m.trim().is_empty());
+            cfg.agent.timeout_secs = agent.timeout_secs;
+            cfg.agent.max_retries = agent.max_retries;
         }
         if let Some(templates) = self.templates {
             if let Some(pack) = templates.pack {

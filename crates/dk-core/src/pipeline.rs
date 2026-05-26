@@ -7,6 +7,7 @@
 //! to `max_retries` times with the validation errors appended to the prompt.
 
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::Path;
 use std::process::Command;
 
@@ -24,6 +25,8 @@ pub enum PipelineError {
     AgentNotFound { agent: String },
     #[error("agent invocation failed: {message}")]
     AgentFailed { message: String },
+    #[error("agent timed out after {secs}s")]
+    AgentTimeout { secs: u64 },
     #[error("no ```json block found in agent response")]
     NoJsonBlock,
     #[error("agent response JSON did not parse: {message}")]
@@ -41,6 +44,7 @@ impl PipelineError {
         match self {
             PipelineError::TemplateNotFound { .. } => "DK_TEMPLATE_NOT_FOUND",
             PipelineError::AgentNotFound { .. } => "DK_AGENT_NOT_FOUND",
+            PipelineError::AgentTimeout { .. } => "DK_AGENT_TIMEOUT",
             PipelineError::Io(_) => "DK_IO_ERROR",
             _ => "DK_PIPELINE_ERROR",
         }
@@ -184,6 +188,7 @@ pub fn extract_json_block(raw: &str) -> Option<String> {
 pub struct SubprocessAgent {
     pub agent: String,
     pub model: Option<String>,
+    pub timeout: Option<std::time::Duration>,
 }
 
 /// The CLI binary's base name (drops any directory path), used to pick
@@ -219,30 +224,101 @@ fn agent_args(agent: &str, model: Option<&str>, prompt: &str) -> Vec<String> {
 
 impl AgentRunner for SubprocessAgent {
     fn run(&self, prompt: &str, working_dir: &Path) -> Result<String, PipelineError> {
-        let mut cmd = Command::new(&self.agent);
-        cmd.current_dir(working_dir);
-        cmd.args(agent_args(&self.agent, self.model.as_deref(), prompt));
-        let output = cmd.output().map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                PipelineError::AgentNotFound {
-                    agent: self.agent.clone(),
+        let args = agent_args(&self.agent, self.model.as_deref(), prompt);
+        if let Some(timeout) = self.timeout {
+            use std::process::Stdio;
+            use wait_timeout::ChildExt;
+
+            let mut cmd = Command::new(&self.agent);
+            cmd.current_dir(working_dir)
+                .args(&args)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+
+            let mut child = cmd.spawn().map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    PipelineError::AgentNotFound {
+                        agent: self.agent.clone(),
+                    }
+                } else {
+                    PipelineError::AgentFailed {
+                        message: e.to_string(),
+                    }
                 }
-            } else {
-                PipelineError::AgentFailed {
+            })?;
+
+            let mut stdout_reader = child.stdout.take().expect("piped stdout");
+            let mut stderr_reader = child.stderr.take().expect("piped stderr");
+
+            let stdout_handle = std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                stdout_reader.read_to_end(&mut buf).ok();
+                buf
+            });
+            let stderr_handle = std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                stderr_reader.read_to_end(&mut buf).ok();
+                buf
+            });
+
+            let status = child
+                .wait_timeout(timeout)
+                .map_err(|e| PipelineError::AgentFailed {
                     message: e.to_string(),
+                })?;
+
+            match status {
+                None => {
+                    let _ = child.kill();
+                    // Drop handles to detach threads — child subprocess may still
+                    // hold the pipe write-end open, so joining would block.
+                    drop(stdout_handle);
+                    drop(stderr_handle);
+                    Err(PipelineError::AgentTimeout {
+                        secs: timeout.as_secs(),
+                    })
+                }
+                Some(s) => {
+                    let stdout_bytes = stdout_handle.join().unwrap_or_default();
+                    let stderr_bytes = stderr_handle.join().unwrap_or_default();
+                    if !s.success() {
+                        Err(PipelineError::AgentFailed {
+                            message: format!(
+                                "agent exited with {}: {}",
+                                s,
+                                String::from_utf8_lossy(&stderr_bytes)
+                            ),
+                        })
+                    } else {
+                        Ok(String::from_utf8_lossy(&stdout_bytes).into_owned())
+                    }
                 }
             }
-        })?;
-        if !output.status.success() {
-            return Err(PipelineError::AgentFailed {
-                message: format!(
-                    "agent exited with {}: {}",
-                    output.status,
-                    String::from_utf8_lossy(&output.stderr)
-                ),
-            });
+        } else {
+            let mut cmd = Command::new(&self.agent);
+            cmd.current_dir(working_dir).args(&args);
+            let output = cmd.output().map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    PipelineError::AgentNotFound {
+                        agent: self.agent.clone(),
+                    }
+                } else {
+                    PipelineError::AgentFailed {
+                        message: e.to_string(),
+                    }
+                }
+            })?;
+            if !output.status.success() {
+                return Err(PipelineError::AgentFailed {
+                    message: format!(
+                        "agent exited with {}: {}",
+                        output.status,
+                        String::from_utf8_lossy(&output.stderr)
+                    ),
+                });
+            }
+            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         }
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
 }
 
@@ -256,7 +332,11 @@ pub enum Progress {
     Validating { attempt: u32, total: u32 },
     /// Validation failed with `errors` problems; about to retry as attempt
     /// `attempt` of `total`.
-    Retrying { attempt: u32, total: u32, errors: usize },
+    Retrying {
+        attempt: u32,
+        total: u32,
+        errors: usize,
+    },
 }
 
 /// Callback that receives [`Progress`] events. Use `&|_| {}` for none.
@@ -397,7 +477,13 @@ mod tests {
     fn claude_args_use_long_model_flag_and_skip_permissions() {
         assert_eq!(
             agent_args("claude", Some("sonnet"), "PROMPT"),
-            vec!["--model", "sonnet", "--dangerously-skip-permissions", "-p", "PROMPT"]
+            vec![
+                "--model",
+                "sonnet",
+                "--dangerously-skip-permissions",
+                "-p",
+                "PROMPT"
+            ]
         );
     }
 
@@ -428,10 +514,33 @@ mod tests {
         let agent = SubprocessAgent {
             agent: "dk-nonexistent-agent-binary-xyz".to_string(),
             model: None,
+            timeout: None,
         };
         let err = agent.run("prompt", Path::new(".")).unwrap_err();
         assert!(matches!(err, PipelineError::AgentNotFound { .. }));
         assert_eq!(err.code(), "DK_AGENT_NOT_FOUND");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn agent_timeout_returns_agent_timeout_error() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("slow-agent.sh");
+        fs::write(&script, "#!/bin/sh\nsleep 10\n").unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let agent = SubprocessAgent {
+            agent: script.to_str().unwrap().to_string(),
+            model: None,
+            timeout: Some(std::time::Duration::from_millis(100)),
+        };
+        let start = std::time::Instant::now();
+        let err = agent.run("prompt", dir.path()).unwrap_err();
+        assert!(start.elapsed() < std::time::Duration::from_millis(500));
+        assert!(matches!(err, PipelineError::AgentTimeout { .. }));
+        assert_eq!(err.code(), "DK_AGENT_TIMEOUT");
     }
 
     #[test]

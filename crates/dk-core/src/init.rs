@@ -224,7 +224,10 @@ mod tests {
             pack: src.path().to_string_lossy().into_owned(),
         };
         let out = run_init(dir.path(), &params).unwrap();
-        assert_eq!(out.pack_source, PackSource::LocalDir(src.path().to_path_buf()));
+        assert_eq!(
+            out.pack_source,
+            PackSource::LocalDir(src.path().to_path_buf())
+        );
         let copied = std::fs::read_to_string(pack::prompt_path(&out.dk_dir)).unwrap();
         assert_eq!(copied, "custom");
     }
