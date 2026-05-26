@@ -1,0 +1,32 @@
+[metadata]
+id = "designkeeper"
+version = "0.1.0"
+description = "DesignKeeper (dk): structured, agent-driven code-review CLI and its dk-core SDK. Reference for review/check/init/doctor/mcp commands, dk.toml + .dk template packs, agent invocation, and the dk-core library API."
+author = "aroff"
+repository = "https://github.com/aroff/designkeeper"
+tags = ["cli", "rust", "code-review", "agent", "dk", "dk-core", "mcp", "sdk"]
+capabilities = [
+    "cli-usage",
+    "sdk-integration",
+    "agent-driven-review",
+    "template-packs",
+    "mcp-server",
+]
+
+[dependencies]
+
+# Optional: FastSkill configuration for skill authors
+# Uncomment and configure as needed
+
+# [tool.fastskill]
+# skills_directory = ".claude/skills"
+#
+# [tool.fastskill.embedding]
+# openai_base_url = "https://api.openai.com/v1"
+# embedding_model = "text-embedding-3-small"
+#
+# [[tool.fastskill.repositories]]
+# name = "default"
+# type = "http-registry"
+# index_url = "https://registry.fastskill.dev"
+# priority = 0

@@ -8,14 +8,14 @@
 # instead we drive the pipeline up to agent invocation with a deliberately
 # missing agent and assert the DK_AGENT_NOT_FOUND error path.
 #
-# Usage:   bash skill/smoke.sh
+# Usage:   bash skill/scripts/smoke.sh
 # Exit:    0 = all checks passed, 1 = one or more failed.
 #
-# Run from the repo root (the dir containing Cargo.toml).
+# Resolves the repo root from its own location (skill/scripts/ -> repo root).
 
 set -uo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO"
 
 PASS=0

@@ -1,168 +1,106 @@
 ---
-name: run-designkeeper
-description: Build, run, and smoke-test the DesignKeeper `dk` CLI — a structured, agent-driven code-review tool. Use when asked to run, build, start, test, screenshot, or drive `dk`, or to exercise its commands (init, review, check, doctor, mcp serve, spec, completion).
+name: designkeeper
+description: >-
+  DesignKeeper (`dk`) — a structured, agent-driven code-review CLI and its
+  `dk-core` SDK. Use when working with the `dk` binary or `dk-core` crate:
+  running or scripting `dk review`/`check`/`init`/`doctor`/`mcp serve`, editing
+  `dk.toml` or `.dk/` template packs, wiring an agent, exposing review over MCP,
+  or calling the review pipeline from Rust.
+license: Apache-2.0
+metadata:
+  version: "0.1.0"
 ---
 
-# Run DesignKeeper (`dk`)
+# DesignKeeper (`dk`)
 
-`dk` is a CLI (Rust workspace; the `dk` binary is a thin shell over `dk-core`).
-It runs structured, agent-driven design/architecture reviews: it renders a
+`dk` runs structured, agent-driven design/architecture reviews. It renders a
 methodology prompt, shells out to an AI agent (`claude` by default), validates
-the agent's JSON against a schema, and emits a report or a pass/fail exit code.
+the agent's JSON against a schema (retrying on failure), and emits a scored
+report or a pass/fail exit code. CodeScene inspires the UX; the domain is
+design/architecture compliance.
 
-There is no GUI. The way to drive it is the **smoke driver**, which builds the
-binary and exercises every command's safe surface (asserting exit codes and
-output) without making a live/paid agent call.
+Two layers, both covered here:
 
-> Paths below are relative to the repo root (the dir with `Cargo.toml`).
-> The driver lives at `skill/smoke.sh`.
+- **`dk` CLI** — a thin [`cli-framework`](https://github.com/aroff/cli-framework)
+  shell. Commands: `review`, `check`, `init`, `doctor`, `mcp serve`, plus the
+  framework built-ins `spec` / `completion` / `version`.
+- **`dk-core` SDK** — the Rust crate holding all domain logic (config, file
+  discovery, template packs, the render→agent→validate pipeline, review/check
+  orchestration, init scaffolding). Reused by the CLI, `serve`, and `mcp`.
 
-## Prerequisites
+Keep this file high-level; **each topic has a detailed reference** under
+`references/` (paths below are relative to this skill directory).
 
-A Rust toolchain (stable) is all the driver needs:
+## When to use
 
-```sh
-cargo --version    # any recent stable
-```
+Load this skill when the user or codebase involves:
 
-To run a *real* `dk review` / `dk check` you additionally need an agent CLI on
-`PATH` — `claude` by default. The driver does **not** require one (it tests the
-pipeline with a deliberately-missing agent). Verify your environment with
-`dk doctor`.
+- The `dk` binary — running, scripting, or debugging any subcommand.
+- `dk-core` — calling `run_review` / `run_check`, the `Pipeline`, or writing a
+  custom `AgentRunner`.
+- `dk.toml` configuration or `.dk/` template packs (methodology, schemas, report
+  layout).
+- Exposing `dk` over MCP, or wiring/troubleshooting the agent subprocess.
 
-## Build
-
-```sh
-cargo build -p dk            # binary at target/debug/dk
-```
-
-The driver uses `target/debug/dk` directly. The bare `dk` in the command
-reference below assumes it's on `PATH` — install the current build with:
+## Install
 
 ```sh
-cargo install --path crates/dk   # puts `dk` in ~/.cargo/bin
+cargo install --path crates/dk      # installs `dk` into ~/.cargo/bin
+# or: cargo build -p dk             # binary at target/debug/dk
 ```
 
-## Run — the driver (agent path)
+Prerequisites: a stable Rust toolchain, and (for real reviews) an agent CLI on
+`PATH` — `claude` by default. `dk doctor` verifies the environment.
+
+## Command surface (one-liners)
+
+| Command | Purpose | Reference |
+|---------|---------|-----------|
+| `dk init` | Scaffold `.dk/` + write `dk.toml` (interactive/iterative) | [references/cli-init.md](references/cli-init.md) |
+| `dk review [<path>]` | Structured review → scored report (md/json) | [references/cli-review.md](references/cli-review.md) |
+| `dk check [<path>]` | Review collapsed to a pass/fail exit code | [references/cli-check.md](references/cli-check.md) |
+| `dk doctor` | Diagnose config, pack, installed/reachable agents | [references/cli-doctor.md](references/cli-doctor.md) |
+| `dk mcp serve` | Expose `dk.review` as an MCP tool (http/stdio) | [references/cli-mcp-serve.md](references/cli-mcp-serve.md) |
+| `dk spec` / `completion` / `version` | Framework built-ins | [references/cli-builtins.md](references/cli-builtins.md) |
+
+## SDK & cross-cutting references
+
+- **`dk-core` library API** — modules, key types, entry points, how to inject a
+  custom agent: [references/sdk-dk-core.md](references/sdk-dk-core.md)
+- **Configuration & template packs** — `dk.toml` schema, `.dk/` layout, prompt
+  slot assembly, file discovery: [references/configuration.md](references/configuration.md)
+- **Agent invocation** — how agents are spawned, per-agent flags (e.g. claude's
+  `--dangerously-skip-permissions`), supported agents:
+  [references/agent-invocation.md](references/agent-invocation.md)
+
+## Quick start
 
 ```sh
-bash skill/smoke.sh
+cd your-project
+dk init --agent claude          # scaffold .dk/ + dk.toml
+dk review src/                  # scored markdown report on stdout
+dk check && echo "design OK"    # gate: exit 0 = approve, 1 = changes/reject
 ```
 
-Builds `dk`, then runs 19 assertions across all commands and prints
-`Result: N passed, M failed`. Exits 0 only if everything passed. `init` is run
-inside a temp dir (it writes `dk.toml` + `.dk/` into the CWD), so the driver
-never pollutes the repo. Expected tail:
+## Smoke driver
 
-```
-== Result: 19 passed, 0 failed
-```
-
-Add a command to `skill/smoke.sh` whenever you add a `dk` subcommand.
-
-## Command reference
-
-Each command verified this session. `dk --help` lists them all.
-
-### `dk init` — scaffold a project
-Writes `dk.toml` and a `.dk/` template pack into the **current directory**;
-interactive when flags are omitted, iterative on re-run. Handler:
-`crates/dk/src/main.rs` (`run_init_cmd`) → `crates/dk-core/src/init.rs`.
+`scripts/smoke.sh` builds `dk` and exercises every command's safe surface
+(asserting exit codes/output) without making a live agent call:
 
 ```sh
-dk init --agent codex --model gpt-5 --template-pack default
+bash skill/scripts/smoke.sh     # prints "Result: N passed, M failed"; exit 0 if all pass
 ```
 
-### `dk review [<path>]` — structured review
-Runs the review pipeline and prints a scored report (markdown default; `--output-format json`).
-With no `<path>` it auto-discovers source files; with a path it reviews exactly that.
-Handler: `crates/dk-core/src/review.rs`. Flags: `-a/--agent`, `-m/--model`,
-`--output-format`, `--output-file`, `--title`, `--description`, `--base-ref`,
-`--head-ref`, `--focus <area>` (repeatable), `--max-findings` (1–50, default 25).
-During the (slow) agent call it shows a progress spinner on a TTY, or stage
-lines (`dk: Reviewing with claude…`) when stderr is piped.
+It drives the review pipeline up to agent invocation with a deliberately
+missing agent (asserting `DK_AGENT_NOT_FOUND`), so it needs only a Rust
+toolchain. See [references/testing.md](references/testing.md).
 
-```sh
-dk review --help
-# Pipeline up to agent invocation, no live agent (verified error path):
-dk review --agent dk-no-such-agent-xyz .   # -> error [DK_AGENT_NOT_FOUND], exit 1
-```
-With an installed agent, `dk review src/` produces the report.
+## Key facts to remember
 
-### `dk check [<path>]` — pass/fail gate
-Same pipeline, collapsed to an exit code: `approve`/`approve_with_comments` → 0,
-`request_changes`/`reject` or pipeline error → 1. Silent on stdout when passing;
-`-v/--verbose` prints the full report. Handler: `crates/dk-core/src/check.rs`.
-
-```sh
-dk check --help
-```
-
-### `dk doctor` — environment diagnostics
-Four checks: effective config, template-pack status, installed agents, configured-agent
-reachability. `--json` for machine output; exits non-zero if any check errors.
-Handler: `crates/dk/src/doctor.rs`.
-
-```sh
-dk doctor          # text table
-dk doctor --json   # structured findings + summary
-```
-
-### `dk mcp serve` — expose `dk` over MCP
-Auto-registered by `cli-framework`'s `mcp-server` feature. HTTP (`--transport http`,
-default) or stdio. Only commands flagged `expose_mcp` are surfaced — currently just
-`review` (tool name `dk.review`).
-
-```sh
-# List the exposed tools over stdio (prints a tools/list response containing dk.review):
-printf '%s\n' \
-  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"x","version":"1"}}}' \
-  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
-  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
-  | timeout 8 dk mcp serve --transport stdio
-```
-
-### `dk spec` / `dk completion` — framework built-ins
-`spec` exports the command surface (`--format json|yaml|markdown`); `completion`
-emits a shell completion stub. Both come from `cli-framework`.
-
-```sh
-dk spec --format json
-dk completion bash
-```
-
-## Gotchas
-
-- **`dk init` writes into the CWD**, not a fixed location — `dk.toml` + `.dk/`
-  land wherever you run it. Run it in the *target project*, never in the `dk`
-  tool repo. The driver always uses a temp dir for this reason.
-- **`review`/`check` shell out to an agent** as `<agent> [--model m] -p <prompt>`
-  (default `claude`; `crates/dk-core/src/pipeline.rs`). For `claude` it adds
-  `--dangerously-skip-permissions`, because in `-p` mode with no TTY claude
-  otherwise blocks forever on tool-permission approval the moment it reads a
-  file. The agent reads the source files itself — `dk` only sends a target list
-  + methodology + schema. No agent on `PATH` ⇒ `DK_AGENT_NOT_FOUND`, exit 1.
-- **No `.dk/` needed to review.** The default template pack is embedded in the
-  binary and materialized to a temp dir when `.dk/` is absent
-  (`crates/dk/src/main.rs`, `ensure_template_dir`).
-- **`mcp serve` exposes only `review`.** `init`/`doctor`/`check` are CLI-only by
-  design (the app sets `McpToolExportPolicy::ExposeMcpOnly` and only `review` has
-  `expose_mcp: true`).
-- **`--template-pack` copies a *local folder*** verbatim; a remote URL is recorded
-  in `dk.toml` but not fetched (embedded defaults are seeded instead).
-- **`dk check` is quiet on success** — no stdout, exit 0. Failures print a
-  findings summary to **stderr**.
-- **A real review is slow and silent on stdout** — output is buffered until the
-  agent finishes (often 1–2 min). Progress goes to stderr; the report appears
-  all at once at the end.
-
-## Troubleshooting
-
-- `error [DK_AGENT_NOT_FOUND]: configured agent not found: <x>` — the agent CLI
-  isn't on `PATH`. Install it, or pick another with `-a <agent>` / `[agent].agent`
-  in `dk.toml`. Confirm with `dk doctor` (the `agent-reachability` check).
-- `dk doctor` **exits 1** — at least one check is an error (e.g. configured agent
-  unreachable). This is intentional so `doctor` can gate CI. `--json` shows which.
-- `cargo build -p dk` pulls `cli-framework` + `aikit-sdk` (a git dependency) on
-  first build, so the initial compile fetches crates and is slow; subsequent
-  builds are fast.
+- **The agent reads files itself.** `dk` sends a target list + methodology +
+  schema, not file contents.
+- **`dk init` writes into the CWD** — run it in the target project, not the `dk`
+  repo.
+- **Reviews are slow and buffered** — no stdout until the agent finishes; a TTY
+  spinner shows progress on stderr.
+- **`mcp serve` exposes only `review`** (`ExposeMcpOnly` + `expose_mcp`).
