@@ -3,12 +3,6 @@
 Expose `dk` over the Model Context Protocol so an MCP-capable agent can call
 review as a tool.
 
-Auto-registered by `cli-framework`'s `mcp-server` feature (enabled in
-`crates/dk/Cargo.toml`: `cli-framework = { ..., features = ["doctor",
-"mcp-server"] }`). The command body lives in
-`cli-framework/src/mcp/commands.rs`; `dk` only opts in via the feature + export
-policy.
-
 ## Synopsis
 
 ```
@@ -26,9 +20,8 @@ dk mcp serve [--transport http|stdio] [--host <H>] [--port <P>] [--path <PATH>]
 
 ## What's exposed
 
-`dk` sets `McpToolExportPolicy::ExposeMcpOnly` (in `main.rs`) and marks only the
-`review` command with `expose_mcp: true`. So the server exposes exactly **one
-tool, `dk.review`** — `init`, `doctor`, and `check` stay CLI-only by design.
+The server exposes exactly **one tool, `dk.review`**. The other commands
+(`init`, `doctor`, `check`) are intentionally not exposed as tools.
 
 ## Verify the tool list (stdio)
 
@@ -51,10 +44,9 @@ dk mcp serve --transport http --host 127.0.0.1 --port 8080 --path /mcp
 
 ## Registering with an agent
 
-`dk` does not bundle `mcp install` (that needs `cli-framework`'s `mcp-install`
-feature, which pulls `aikit-sdk`). Register manually in your agent's MCP config,
-e.g. an `http` server at `http://127.0.0.1:8080/mcp`, or a `stdio` server whose
-command is `dk mcp serve --transport stdio`.
+`dk` doesn't include an `mcp install` command. Register it manually in your
+agent's MCP config — e.g. an `http` server at `http://127.0.0.1:8080/mcp`, or a
+`stdio` server whose command is `dk mcp serve --transport stdio`.
 
 ## Gotchas
 
@@ -62,5 +54,3 @@ command is `dk mcp serve --transport stdio`.
   corrupt the stdio JSON-RPC stream on stdout.
 - The exposed `review` tool still shells out to the configured agent — the MCP
   server host needs that agent on `PATH`.
-- Adding more tools = set `expose_mcp: true` on the command (and keep the
-  `ExposeMcpOnly` policy), or switch the policy to `AllCommands`.

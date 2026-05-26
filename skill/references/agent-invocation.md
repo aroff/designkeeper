@@ -1,25 +1,19 @@
 # Agent invocation
 
-How `dk` turns a rendered prompt into an agent call, and the per-agent flags
-that matter. Source: `crates/dk-core/src/pipeline.rs` (`SubprocessAgent`,
-`agent_args`, `agent_basename`).
+How `dk review` / `dk check` turn a prompt into an agent call, and the
+per-agent flags that matter — useful when troubleshooting a hang or
+`DK_AGENT_NOT_FOUND`.
 
 ## The model
 
-`dk` does **not** stream a context payload. It builds a task directive (prompt)
-and runs the configured agent binary with that prompt; the agent reads the
-repository files itself, in the working dir as its cwd.
+`dk` does **not** stream a context payload. It builds a task directive (the
+prompt) and runs the configured agent binary with that prompt, using the
+working dir as the agent's cwd; the agent reads the repository files itself.
+`dk` captures the agent's stdout and gives it no interactive stdin. A missing
+binary surfaces as `DK_AGENT_NOT_FOUND`; a non-zero agent exit as
+`DK_PIPELINE_ERROR`.
 
-```rust
-pub struct SubprocessAgent { pub agent: String, pub model: Option<String> }
-```
-
-`run()` does `Command::new(agent).current_dir(working_dir).args(agent_args(...))`,
-captures stdout via `cmd.output()` (stdin is null — no interactive input), and
-returns stdout. A non-zero exit becomes `AgentFailed`; a missing binary becomes
-`AgentNotFound`.
-
-## Argv construction (`agent_args`)
+## What `dk` runs
 
 ```
 <agent> [--model <m>] [--dangerously-skip-permissions (claude only)] -p <prompt>
@@ -28,38 +22,31 @@ returns stdout. A non-zero exit becomes `AgentFailed`; a missing binary becomes
 - **`--model` (long form)**: `claude` rejects `-m`; `codex`/`gemini` accept both
   `-m` and `--model`. Using `--model` works across all of them. (A `-m` here was
   the original bug that broke `claude`.)
-- **`--dangerously-skip-permissions` (claude only)**: gated on
-  `agent_basename(agent) == "claude"`. In `-p` (print) mode with no TTY, claude
-  otherwise **blocks forever** on tool-permission approval the moment the agent
-  tries to read a file — so a review hangs. Bypassing permissions lets it run
-  unattended. Other agents don't get (or need) this flag.
-- **`-p <prompt>`**: print/non-interactive mode; the prompt is the positional
+- **`--dangerously-skip-permissions` (claude only)**: added only for `claude`.
+  In `-p` (print) mode with no TTY, claude otherwise **blocks forever** on
+  tool-permission approval the moment the agent tries to read a file — so a
+  review hangs. Bypassing permissions lets it run unattended. Other agents
+  don't get (or need) this flag.
+- **`-p <prompt>`**: print / non-interactive mode; the prompt is the positional
   argument.
 
-`agent_basename` drops any directory path, so `/usr/local/bin/claude` still
-matches `claude`.
+A configured agent given as a full path (e.g. `/usr/local/bin/claude`) is still
+recognized as `claude` by its file name, so the claude-specific flag applies.
 
 ## Supported agents
 
-`KNOWN_AGENTS` (in `crates/dk/src/doctor.rs`) maps keys → binaries: `claude`,
-`codex`, `gemini`, `cursor-agent`, `copilot`, `opencode`. Any key works as long
-as the binary is on `PATH` and accepts `--model`/`-p`; unknown keys fall back to
-the key as the binary name (no claude-specific flag).
+`dk` knows these agents: `claude`, `codex`, `gemini`, `cursor-agent`,
+`copilot`, `opencode`. Any agent works as long as its binary is on `PATH` and
+accepts `--model` / `-p`; an unknown agent key is used directly as the binary
+name (without the claude-specific flag).
 
-## Progress events
+## Progress
 
-`Pipeline::run` emits `dk_core::pipeline::Progress` on the calling thread:
-
-```rust
-pub enum Progress {
-    AgentRunning { attempt: u32, total: u32 },     // before each agent call
-    Validating   { attempt: u32, total: u32 },     // agent responded; validating
-    Retrying     { attempt: u32, total: u32, errors: usize }, // about to retry
-}
-```
-
-`total` is `max_retries + 1` (3). The CLI renders these as a TTY spinner with
-elapsed time, or plain stage lines when stderr is piped.
+During the agent call `dk` shows progress on **stderr**: a spinner with elapsed
+seconds and the attempt number (e.g. `attempt 1/3`) on a TTY, or plain stage
+lines when stderr is piped. There are up to 3 attempts (2 retries after a
+validation failure). SDK consumers can subscribe to the same events — see
+[sdk-dk-core.md](sdk-dk-core.md).
 
 ## Custom agents (SDK)
 

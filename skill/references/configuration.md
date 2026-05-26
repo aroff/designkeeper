@@ -5,10 +5,8 @@ walks up parent directories to find each.
 
 ## `dk.toml` (control file)
 
-Resolved by `dk_core::config::resolve_config` (`crates/dk-core/src/config.rs`):
-walk up from the working dir to the first `dk.toml`; absent → built-in
-defaults. Parsing uses `deny_unknown_fields`, so unknown keys are a hard error
-(`DK_CONFIG_PARSE`).
+`dk` walks up from the working dir to the first `dk.toml`; if none is found it
+uses built-in defaults. Unknown keys are a hard error (`DK_CONFIG_PARSE`).
 
 ```toml
 [scan]
@@ -29,7 +27,7 @@ pack = "default"                     # "default" or a local folder
 All sections/fields are optional and merged over defaults. An empty `model =
 ""` is treated as unset.
 
-**Defaults** (`default_config`): `extensions` = ~19 languages (`.rs .ts .tsx .js
+**Defaults**: `extensions` = ~19 languages (`.rs .ts .tsx .js
 .jsx .py .go .java .kt .c .cpp .h .hpp .rb .ex .exs .scala .swift .cs`),
 `ignore_patterns` empty, `format` markdown, `agent` `claude`, `model` none,
 `pack` `default`.
@@ -39,7 +37,7 @@ built-in defaults.
 
 ## `.dk/` (template pack)
 
-Created by `dk init`; layout (`crates/dk-core/src/pack.rs`):
+Created by `dk init`; layout:
 
 ```
 .dk/
@@ -54,14 +52,13 @@ Created by `dk init`; layout (`crates/dk-core/src/pack.rs`):
 ```
 
 `dk` resolves the pack by walking up for a `.dk/` containing
-`templates/review.md` (`ensure_template_dir`, `crates/dk/src/main.rs`). If none
-is found, the **embedded** default pack (compiled into the binary via
-`include_str!` from `specs/review/`) is materialized to a temp dir — so reviews
-work with no `.dk/` present. Edit any file to customize behavior.
+`templates/review.md`. If none is found, the built-in default pack is used
+(materialized to a temp dir) — so reviews work with no `.dk/` present. Edit any
+file in `.dk/` to customize behavior.
 
 ## Prompt slot assembly
 
-`slots::build_prompt_slots` fills the template's `{{slots}}`:
+`dk` fills the template's `{{slots}}`:
 
 | Slot | Source |
 |------|--------|
@@ -77,11 +74,11 @@ work with no `.dk/` present. Edit any file to customize behavior.
 The prompt is a **task directive** — methodology + target + schema — not a
 context payload. The agent reads source files from disk itself.
 
-## File discovery (`discovery::discover_paths`)
+## File discovery
 
-Used only when `dk review` is run without a `<path>`. Walks the working dir with
-the `ignore` crate (`require_git(false)`, so `.gitignore` applies even outside
-git; hidden files/dirs skipped) and keeps files that:
+Used only when `dk review` is run without a `<path>`. `dk` walks the working dir
+— honoring `.gitignore` even outside a git repo, and skipping hidden files/dirs
+— and keeps files that:
 
 1. match an extension in `[scan].extensions`,
 2. are not gitignored,

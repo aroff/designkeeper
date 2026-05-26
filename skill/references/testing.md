@@ -27,37 +27,14 @@ What it covers (19 assertions):
 
 Add an assertion here whenever you add a `dk` subcommand.
 
-## Unit + integration tests
-
-```sh
-cargo test                 # whole workspace
-cargo test -p dk-core      # domain crate only
-```
-
-- `dk-core` unit tests cover config parsing/precedence, discovery, slot
-  rendering, the pipeline (retry/exhaust), `agent_args` flag construction,
-  init scaffolding, and the check verdict→exit mapping.
-- Integration tests (`crates/dk-core/tests/fixtures.rs`) run the full review
-  pipeline against **recorded** agent responses (no live agent), using fixtures
-  under `specs/review/examples/`.
-
-Tests inject agents via the `AgentRunner` trait (e.g. `CannedAgent` /
-`RecordedAgent`) and pass a no-op progress callback `&|_| {}`.
-
-## Lint
-
-```sh
-cargo clippy --all-targets
-```
-
 ## Manual end-to-end (real agent, billed)
 
 Needs an agent CLI on `PATH` (default `claude`). A real review takes ~1–2 min
 and is buffered:
 
 ```sh
-dk review crates/dk/src/main.rs            # scored report on stdout
-dk review --output-format json -o out.json src/
+dk review src/                             # scored report on stdout
+dk review --output-format json --output-file out.json src/
 ```
 
 Watch stderr for the progress spinner (TTY) or stage lines (piped).
