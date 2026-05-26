@@ -9,7 +9,9 @@ mod doctor;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::exit;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use cli_framework::doctor::DoctorModule;
 use cli_framework::mcp::McpToolExportPolicy;
@@ -17,6 +19,7 @@ use cli_framework::prelude::*;
 use cli_framework::spec::arg_spec::{ArgKind, ArgValueType, Cardinality};
 
 use dk_core::config::{default_config, resolve_config, DkConfig, OutputFormat};
+use dk_core::pipeline::Progress;
 use dk_core::{pack, review, run_check, ReviewInput, ReviewOptions};
 use dk_core::{run_init, InitParams};
 use dk_core::{ChangeContext, FocusArea};
@@ -241,7 +244,10 @@ fn run_review_cmd(args: CommandArgs) -> anyhow::Result<()> {
         Err(e) => fail("DK_IO_ERROR", &e.to_string()),
     };
 
-    let output = match review::run_review(input, &config, &template_dir) {
+    let reporter = ProgressReporter::new(&config.agent.agent);
+    let result = review::run_review(input, &config, &template_dir, &|e| reporter.handle(e));
+    reporter.finish();
+    let output = match result {
         Ok(o) => o,
         Err(e) => fail(e.code(), &e.to_string()),
     };
@@ -278,7 +284,9 @@ fn run_check_cmd(args: CommandArgs) -> anyhow::Result<()> {
     };
     let verbose = flag(&args, "verbose");
 
-    let result = run_check(input, &config, &template_dir, verbose);
+    let reporter = ProgressReporter::new(&config.agent.agent);
+    let result = run_check(input, &config, &template_dir, verbose, &|e| reporter.handle(e));
+    reporter.finish();
     if let Some(report) = &result.report {
         if let Err(e) = emit(&args, report) {
             fail("DK_IO_ERROR", &e.to_string());
@@ -480,6 +488,115 @@ fn emit(args: &CommandArgs, content: &str) -> Result<(), std::io::Error> {
             println!("{content}");
             Ok(())
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Progress reporting
+// ---------------------------------------------------------------------------
+
+/// Renders [`Progress`] events from the review pipeline. On a TTY it animates a
+/// spinner with elapsed time during the (long) agent call; otherwise it prints
+/// plain stage lines. All output goes to stderr, never stdout.
+struct ProgressReporter {
+    agent: String,
+    tty: bool,
+    ticker: Mutex<Option<Ticker>>,
+}
+
+impl ProgressReporter {
+    fn new(agent: &str) -> Self {
+        ProgressReporter {
+            agent: agent.to_string(),
+            tty: io::stderr().is_terminal(),
+            ticker: Mutex::new(None),
+        }
+    }
+
+    fn handle(&self, event: Progress) {
+        match event {
+            Progress::AgentRunning { attempt, total } => {
+                let label = if total > 1 {
+                    format!("Reviewing with {} (attempt {attempt}/{total})", self.agent)
+                } else {
+                    format!("Reviewing with {}", self.agent)
+                };
+                if self.tty {
+                    self.swap_ticker(Some(Ticker::start(label)));
+                } else {
+                    eprintln!("dk: {label}…");
+                }
+            }
+            Progress::Validating { .. } => {
+                self.swap_ticker(None);
+                eprintln!("dk: validating response…");
+            }
+            Progress::Retrying {
+                attempt,
+                total,
+                errors,
+            } => {
+                self.swap_ticker(None);
+                let plural = if errors == 1 { "" } else { "s" };
+                eprintln!(
+                    "dk: validation failed ({errors} issue{plural}); retrying (attempt {attempt}/{total})…"
+                );
+            }
+        }
+    }
+
+    fn swap_ticker(&self, next: Option<Ticker>) {
+        let mut guard = self.ticker.lock().unwrap();
+        if let Some(mut old) = guard.take() {
+            old.stop();
+        }
+        *guard = next;
+    }
+
+    /// Stop any running spinner. Call after the pipeline returns (incl. errors).
+    fn finish(&self) {
+        self.swap_ticker(None);
+    }
+}
+
+/// Background spinner thread that repaints an elapsed-time line on stderr.
+struct Ticker {
+    stop: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Ticker {
+    fn start(label: String) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        let handle = std::thread::spawn(move || {
+            const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            let start = Instant::now();
+            let mut i = 0usize;
+            while !flag.load(Ordering::Relaxed) {
+                eprint!(
+                    "\r\x1b[2K{} {label}… {}s",
+                    FRAMES[i % FRAMES.len()],
+                    start.elapsed().as_secs()
+                );
+                let _ = io::stderr().flush();
+                i += 1;
+                std::thread::sleep(Duration::from_millis(120));
+            }
+        });
+        Ticker {
+            stop,
+            handle: Some(handle),
+        }
+    }
+
+    fn stop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+        eprint!("\r\x1b[2K"); // clear the spinner line
+        let _ = io::stderr().flush();
     }
 }
 

@@ -126,6 +126,7 @@ fn end_to_end_run_review_with_recorded_response() {
         &default_config(),
         pack_dir.path(),
         &agent,
+        &|_| {},
     )
     .expect("review succeeds");
     assert_eq!(output.summary.verdict, Verdict::ApproveWithComments);
@@ -151,6 +152,7 @@ fn run_review_rejects_score_mismatch() {
         &default_config(),
         pack_dir.path(),
         &agent,
+        &|_| {},
     )
     .unwrap_err();
     assert_eq!(err.code(), "DK_SCORE_MISMATCH");
@@ -163,7 +165,7 @@ fn run_review_input_validation_error() {
     // Empty target violates minLength: 1 in the input schema.
     input.target = Some(String::new());
     let agent = RecordedAgent("unused".to_string());
-    let err = review::run_review_with_agent(input, &default_config(), pack_dir.path(), &agent)
+    let err = review::run_review_with_agent(input, &default_config(), pack_dir.path(), &agent, &|_| {})
         .unwrap_err();
     assert_eq!(err.code(), "DK_INPUT_VALIDATION");
 }
@@ -179,6 +181,7 @@ fn run_review_template_not_found() {
         &default_config(),
         empty.path(),
         &agent,
+        &|_| {},
     )
     .unwrap_err();
     assert_eq!(err.code(), "DK_TEMPLATE_NOT_FOUND");

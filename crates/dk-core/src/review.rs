@@ -332,12 +332,13 @@ pub fn run_review(
     input: ReviewInput,
     config: &DkConfig,
     template_dir: &Path,
+    progress: &crate::pipeline::ProgressFn,
 ) -> Result<ReviewOutput, ReviewError> {
     let agent = crate::pipeline::SubprocessAgent {
         agent: config.agent.agent.clone(),
         model: config.agent.model.clone(),
     };
-    run_review_with_agent(input, config, template_dir, &agent)
+    run_review_with_agent(input, config, template_dir, &agent, progress)
 }
 
 /// Run the review pipeline against an injected agent (used by tests).
@@ -346,6 +347,7 @@ pub fn run_review_with_agent(
     config: &DkConfig,
     template_dir: &Path,
     agent: &dyn AgentRunner,
+    progress: &crate::pipeline::ProgressFn,
 ) -> Result<ReviewOutput, ReviewError> {
     let working_dir = Path::new(&input.working_dir);
     if !working_dir.is_dir() {
@@ -373,7 +375,13 @@ pub fn run_review_with_agent(
     let renderer = DefaultRenderer;
     let validator = JsonResponseValidator;
     let pipeline = Pipeline::new(&renderer, agent, &validator);
-    let value = pipeline.run(&prompt_template, &prompt_slots, working_dir, &output_schema)?;
+    let value = pipeline.run(
+        &prompt_template,
+        &prompt_slots,
+        working_dir,
+        &output_schema,
+        progress,
+    )?;
 
     // The pipeline already schema-validated; deserialize into the typed output.
     let output: ReviewOutput =
@@ -479,7 +487,7 @@ mod tests {
             options: ReviewOptions::default(),
         };
         let cfg = crate::config::default_config();
-        let err = run_review(input, &cfg, Path::new("/tmp")).unwrap_err();
+        let err = run_review(input, &cfg, Path::new("/tmp"), &|_| {}).unwrap_err();
         assert_eq!(err.code(), "DK_WORKING_DIR_INVALID");
     }
 }

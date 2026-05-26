@@ -186,14 +186,42 @@ pub struct SubprocessAgent {
     pub model: Option<String>,
 }
 
+/// The CLI binary's base name (drops any directory path), used to pick
+/// agent-specific flags.
+fn agent_basename(agent: &str) -> &str {
+    Path::new(agent)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(agent)
+}
+
+/// Build the argv (after the program name) for invoking `agent` in
+/// non-interactive print mode with `prompt`.
+///
+/// - `--model` (long form): `claude` rejects `-m`; codex/gemini accept both.
+/// - `--dangerously-skip-permissions` (claude only): in `-p` mode with no TTY,
+///   claude blocks on tool-permission approval the moment the agent tries to
+///   read a file, so a review would hang forever. Bypassing permissions lets
+///   it run unattended. Other agents don't have (or need) this flag.
+fn agent_args(agent: &str, model: Option<&str>, prompt: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(model) = model {
+        args.push("--model".to_string());
+        args.push(model.to_string());
+    }
+    if agent_basename(agent) == "claude" {
+        args.push("--dangerously-skip-permissions".to_string());
+    }
+    args.push("-p".to_string());
+    args.push(prompt.to_string());
+    args
+}
+
 impl AgentRunner for SubprocessAgent {
     fn run(&self, prompt: &str, working_dir: &Path) -> Result<String, PipelineError> {
         let mut cmd = Command::new(&self.agent);
         cmd.current_dir(working_dir);
-        if let Some(model) = &self.model {
-            cmd.arg("-m").arg(model);
-        }
-        cmd.arg("-p").arg(prompt);
+        cmd.args(agent_args(&self.agent, self.model.as_deref(), prompt));
         let output = cmd.output().map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 PipelineError::AgentNotFound {
@@ -217,6 +245,22 @@ impl AgentRunner for SubprocessAgent {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
 }
+
+/// Progress events emitted by [`Pipeline::run`] so a caller (the CLI) can render
+/// a live indicator. Fired synchronously on the calling thread.
+#[derive(Debug, Clone, Copy)]
+pub enum Progress {
+    /// About to invoke the agent for attempt `attempt` of `total`.
+    AgentRunning { attempt: u32, total: u32 },
+    /// Agent responded; validating its output (attempt `attempt` of `total`).
+    Validating { attempt: u32, total: u32 },
+    /// Validation failed with `errors` problems; about to retry as attempt
+    /// `attempt` of `total`.
+    Retrying { attempt: u32, total: u32, errors: usize },
+}
+
+/// Callback that receives [`Progress`] events. Use `&|_| {}` for none.
+pub type ProgressFn<'a> = dyn Fn(Progress) + 'a;
 
 /// Composes renderer + agent + validator with retry-on-validation-failure.
 pub struct Pipeline<'a> {
@@ -249,13 +293,22 @@ impl<'a> Pipeline<'a> {
         slots: &HashMap<String, String>,
         working_dir: &Path,
         schema: &Value,
+        progress: &ProgressFn,
     ) -> Result<Value, PipelineError> {
         let base_prompt = self.renderer.render(prompt_template, slots)?;
         let mut prompt = base_prompt.clone();
         let total_attempts = self.max_retries + 1;
         let mut last_errors: Vec<String> = Vec::new();
         for attempt in 1..=total_attempts {
+            progress(Progress::AgentRunning {
+                attempt,
+                total: total_attempts,
+            });
             let raw = self.agent.run(&prompt, working_dir)?;
+            progress(Progress::Validating {
+                attempt,
+                total: total_attempts,
+            });
             match self.validator.extract_and_validate(&raw, schema) {
                 Ok(value) => return Ok(value),
                 Err(PipelineError::SchemaValidation { errors, .. }) => {
@@ -270,6 +323,11 @@ impl<'a> Pipeline<'a> {
                 Err(other) => return Err(other),
             }
             if attempt < total_attempts {
+                progress(Progress::Retrying {
+                    attempt: attempt + 1,
+                    total: total_attempts,
+                    errors: last_errors.len(),
+                });
                 prompt = format!(
                     "{base_prompt}\n\n## Previous attempt failed validation\n\
                      Your last response did not validate. Fix these errors and reply again with \
@@ -336,6 +394,36 @@ mod tests {
     }
 
     #[test]
+    fn claude_args_use_long_model_flag_and_skip_permissions() {
+        assert_eq!(
+            agent_args("claude", Some("sonnet"), "PROMPT"),
+            vec!["--model", "sonnet", "--dangerously-skip-permissions", "-p", "PROMPT"]
+        );
+    }
+
+    #[test]
+    fn claude_args_skip_permissions_without_model() {
+        assert_eq!(
+            agent_args("claude", None, "PROMPT"),
+            vec!["--dangerously-skip-permissions", "-p", "PROMPT"]
+        );
+    }
+
+    #[test]
+    fn non_claude_agent_omits_skip_permissions() {
+        assert_eq!(
+            agent_args("codex", Some("o3"), "PROMPT"),
+            vec!["--model", "o3", "-p", "PROMPT"]
+        );
+    }
+
+    #[test]
+    fn agent_basename_strips_path() {
+        assert_eq!(agent_basename("/usr/local/bin/claude"), "claude");
+        assert_eq!(agent_basename("claude"), "claude");
+    }
+
+    #[test]
     fn subprocess_agent_missing_binary_is_agent_not_found() {
         let agent = SubprocessAgent {
             agent: "dk-nonexistent-agent-binary-xyz".to_string(),
@@ -390,6 +478,7 @@ mod tests {
                 &HashMap::from([("p".to_string(), "x".to_string())]),
                 Path::new("."),
                 &tiny_schema(),
+                &|_| {},
             )
             .unwrap();
         assert_eq!(v, json!({"ok": true}));
@@ -410,6 +499,7 @@ mod tests {
                 &HashMap::from([("p".to_string(), "x".to_string())]),
                 Path::new("."),
                 &tiny_schema(),
+                &|_| {},
             )
             .unwrap();
         assert_eq!(v, json!({"ok": true}));
@@ -431,6 +521,7 @@ mod tests {
                 &HashMap::from([("p".to_string(), "x".to_string())]),
                 Path::new("."),
                 &tiny_schema(),
+                &|_| {},
             )
             .unwrap_err();
         match err {
