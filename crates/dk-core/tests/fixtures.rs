@@ -54,6 +54,20 @@ fn invalid_input_fails_schema() {
     assert!(validate_json(&input_schema(), &instance).is_err());
 }
 
+// ---- AC-P2: suggested_patch > 2000 chars fails output schema ---------------
+
+#[test]
+fn suggested_patch_too_long_fails_output_schema() {
+    let mut instance = read_json("examples/output/approve.json");
+    // Inject a suggested_patch that exceeds the 2000-char maxLength constraint.
+    let long_patch = "x".repeat(2001);
+    instance["findings"][0]["suggested_patch"] = serde_json::Value::String(long_patch);
+    assert!(
+        validate_json(&output_schema(), &instance).is_err(),
+        "expected schema validation to fail for suggested_patch > 2000 chars"
+    );
+}
+
 // ---- AC #16 / #17: output fixtures pass output schema --------------------
 
 #[test]

@@ -848,4 +848,109 @@ mod tests {
         assert!(flag(&args(&[("verbose", "true")], &[]), "verbose"));
         assert!(!flag(&args(&[], &[]), "verbose"));
     }
+
+    // ---- AC-FG: --from-git tests -------------------------------------------
+
+    fn git_available() -> bool {
+        std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .is_ok()
+    }
+
+    fn init_repo_with_commit(dir: &std::path::Path, message: &str) -> bool {
+        if !git_available() {
+            return false;
+        }
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .current_dir(dir)
+                .args(args)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        };
+        run(&["init"])
+            && run(&["config", "user.email", "test@test.com"])
+            && run(&["config", "user.name", "Test"])
+            && std::fs::write(dir.join("a.rs"), "fn a() {}").is_ok()
+            && run(&["add", "."])
+            && run(&["commit", "-m", message])
+    }
+
+    #[test]
+    fn map_input_from_git_populates_title_in_git_repo() {
+        if !git_available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        if !init_repo_with_commit(dir.path(), "my pr title") {
+            return;
+        }
+        // Use HEAD itself as base-ref — diff will be empty but title derivation works.
+        let a = args(&[("from-git", "HEAD")], &[]);
+        let input = map_input(&a, dir.path(), &default_config()).unwrap();
+        let cc = input.change_context.unwrap();
+        assert_eq!(
+            cc.title.as_deref(),
+            Some("my pr title"),
+            "title should come from git log"
+        );
+    }
+
+    #[test]
+    fn map_input_from_git_explicit_title_overrides_git() {
+        if !git_available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        if !init_repo_with_commit(dir.path(), "git title") {
+            return;
+        }
+        let a = args(&[("from-git", "HEAD"), ("title", "Override")], &[]);
+        let input = map_input(&a, dir.path(), &default_config()).unwrap();
+        let cc = input.change_context.unwrap();
+        assert_eq!(
+            cc.title.as_deref(),
+            Some("Override"),
+            "explicit --title should override git-derived title"
+        );
+    }
+
+    #[test]
+    fn map_input_from_git_non_git_dir_does_not_fail() {
+        let dir = tempfile::tempdir().unwrap();
+        // Not a git repo — git calls return None; base_ref/head_ref are still set from the flag.
+        let a = args(&[("from-git", "main")], &[]);
+        let result = map_input(&a, dir.path(), &default_config());
+        assert!(result.is_ok(), "from-git in non-git dir must not fail");
+        let input = result.unwrap();
+        // title/description/diff_stat should be None (git failed); base_ref/head_ref are derived
+        // from the flag itself so they are Some.
+        let cc = input.change_context.unwrap();
+        assert!(cc.title.is_none(), "title should be None in non-git dir");
+        assert!(
+            cc.diff_stat.is_none(),
+            "diff_stat should be None in non-git dir"
+        );
+    }
+
+    #[test]
+    fn map_input_from_git_works_for_check_command_path() {
+        // check shares map_input; verify --from-git is handled identically.
+        if !git_available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        if !init_repo_with_commit(dir.path(), "check title") {
+            return;
+        }
+        let a = args(&[("from-git", "HEAD")], &[]);
+        let input = map_input(&a, dir.path(), &default_config()).unwrap();
+        let cc = input.change_context.unwrap();
+        // Same derivation as review — title should be populated.
+        assert_eq!(cc.title.as_deref(), Some("check title"));
+        assert_eq!(cc.base_ref.as_deref(), Some("HEAD"));
+        assert_eq!(cc.head_ref.as_deref(), Some("HEAD"));
+    }
 }
