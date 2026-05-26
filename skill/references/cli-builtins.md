@@ -1,7 +1,6 @@
 # Built-in commands: `spec`, `completion`, `version`
 
-These are provided by `cli-framework`'s `AppBuilder::build`, not defined in
-`dk`. They appear automatically in `dk --help`.
+Utility commands that ship with `dk` and appear in `dk --help`.
 
 ## `dk spec`
 
@@ -23,9 +22,9 @@ dk spec --format json | jq '.commands[].id'
 dk spec --format markdown --output COMMANDS.md
 ```
 
-The JSON has `schemaVersion: "cli-framework.command-surface.v1"`, an `app`
-block (`name`, `version`), and a `commands` array (each with `path`, `id`,
-`summary`, `syntax`, `category`, `args`, …).
+The JSON has a `schemaVersion`, an `app` block (`name`, `version`), and a
+`commands` array (each with `path`, `id`, `summary`, `syntax`, `category`,
+`args`, …).
 
 ## `dk completion`
 
@@ -51,8 +50,6 @@ review spec` and registers `complete -F _dk dk`.
 dk version        # -> "dk 0.1.0"
 dk --version      # same
 ```
-
-Version comes from `AppBuilder::with_version("dk", env!("CARGO_PKG_VERSION"))`.
 
 ## `dk help`
 

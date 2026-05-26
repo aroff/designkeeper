@@ -21,12 +21,12 @@ design/architecture compliance.
 
 Two layers, both covered here:
 
-- **`dk` CLI** — a thin [`cli-framework`](https://github.com/aroff/cli-framework)
-  shell. Commands: `review`, `check`, `init`, `doctor`, `mcp serve`, plus the
-  framework built-ins `spec` / `completion` / `version`.
+- **`dk` CLI** — the binary. Commands: `review`, `check`, `init`, `doctor`,
+  `mcp serve`, plus the built-in `spec` / `completion` / `version`.
 - **`dk-core` SDK** — the Rust crate holding all domain logic (config, file
   discovery, template packs, the render→agent→validate pipeline, review/check
-  orchestration, init scaffolding). Reused by the CLI, `serve`, and `mcp`.
+  orchestration, init scaffolding). Framework-free; reused by the CLI and any
+  future `serve` / `mcp` front-end.
 
 Keep this file high-level; **each topic has a detailed reference** under
 `references/` (paths below are relative to this skill directory).
@@ -103,4 +103,4 @@ toolchain. See [references/testing.md](references/testing.md).
   repo.
 - **Reviews are slow and buffered** — no stdout until the agent finishes; a TTY
   spinner shows progress on stderr.
-- **`mcp serve` exposes only `review`** (`ExposeMcpOnly` + `expose_mcp`).
+- **`mcp serve` exposes only `review`** as a tool (`dk.review`).

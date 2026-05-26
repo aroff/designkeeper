@@ -3,9 +3,6 @@
 Scaffold a `.dk/` template pack and write/update `dk.toml` in the **current
 directory**. Interactive when flags are omitted; iterative on re-run.
 
-Handler: `crates/dk/src/main.rs` (`run_init_cmd`, `prompt_or_default`) →
-`dk_core::run_init` (`crates/dk-core/src/init.rs`).
-
 ## Synopsis
 
 ```
@@ -20,11 +17,10 @@ dk init [-a --agent <agent>] [-m --model <model>] [--template-pack <url-or-folde
 
 ## Interactive flow
 
-Any flag not passed is prompted for **only when stdin is a TTY**
-(`prompt_or_default` uses `IsTerminal`); non-interactive invocations silently
-take the default. Defaults are seeded from an existing `dk.toml` (so re-running
-keeps prior values), falling back to built-ins (`agent=claude`, model none,
-pack `default`).
+Any flag not passed is prompted for **only when stdin is a TTY**;
+non-interactive invocations (pipes, CI) silently take the default. Defaults are
+seeded from an existing `dk.toml` (so re-running keeps prior values), falling
+back to built-ins (`agent=claude`, model none, pack `default`).
 
 ```
 $ dk init
@@ -39,17 +35,16 @@ Installed default template pack at /path/.dk
 
 - **`dk.toml`** in the CWD: `[agent].agent`, `[agent].model`, `[templates].pack`.
   Re-running parses the existing file and overwrites only those fields,
-  preserving any `[scan]` / `[output]` the user added (`updated_existing`).
+  preserving any `[scan]` / `[output]` you added.
 - **`.dk/`** template pack in the CWD: `templates/`, `schemas/`, `reports/`.
 
 ## `--template-pack` semantics
 
-- `default` → writes the embedded default pack (`pack::write_default_pack`).
-- A path to an **existing local directory** → copied verbatim into `.dk/`
-  (`PackSource::LocalDir`).
+- `default` → installs the built-in default pack.
+- A path to an **existing local directory** → copied verbatim into `.dk/`.
 - Anything else (e.g. a remote URL) → recorded in `dk.toml [templates].pack`,
-  but **not fetched**; `.dk/` is seeded with embedded defaults so `dk review`
-  works immediately (`PackSource::Embedded`). Remote fetch is not implemented.
+  but **not fetched**; `.dk/` is seeded with the default pack so `dk review`
+  works immediately. (Remote fetch is not yet supported.)
 
 ## Examples
 

@@ -4,12 +4,16 @@ The domain crate behind `dk`. All review logic lives here; the `dk` binary is a
 thin shell. Embed it to run reviews from Rust, inject a custom agent, or build
 another front-end (`serve`, `mcp`).
 
+`dk-core` has **no `cli-framework` dependency** — that lives only in the `dk`
+binary crate. Embedding `dk-core` pulls in just serde / serde_json / toml /
+jsonschema / ignore / globset / tracing / thiserror.
+
 ```toml
 [dependencies]
 dk-core = { path = "crates/dk-core" }   # or git/version once published
 ```
 
-## Modules (`crates/dk-core/src/lib.rs`)
+## Modules
 
 | Module | Purpose |
 |--------|---------|
@@ -42,8 +46,18 @@ pub fn run_check_with_agent(input, config, template_dir, verbose,
 pub fn run_init(working_dir: &Path, params: &InitParams) -> Result<InitOutcome, InitError>;
 ```
 
-`ProgressFn = dyn Fn(Progress)`. Pass `&|_| {}` for none. See
-[agent-invocation.md](agent-invocation.md) for `Progress`.
+`ProgressFn = dyn Fn(Progress)`; pass `&|_| {}` for none. `Progress` lets you
+render your own indicator:
+
+```rust
+pub enum Progress {
+    AgentRunning { attempt: u32, total: u32 },                 // before each agent call
+    Validating   { attempt: u32, total: u32 },                 // agent responded; validating
+    Retrying     { attempt: u32, total: u32, errors: usize },  // about to retry
+}
+```
+
+`total` is the attempt budget (3 = 1 try + 2 retries).
 
 ## Key types (re-exported at crate root)
 

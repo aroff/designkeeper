@@ -1,10 +1,8 @@
 # `dk doctor`
 
-Diagnose the runtime environment. Auto-registered by `cli-framework`'s `doctor`
-feature once `dk` registers its checks.
-
-Checks defined in `crates/dk/src/doctor.rs` (`checks()` returns the four below);
-wired via `DoctorModule::new(doctor::checks())` in `crates/dk/src/main.rs`.
+Diagnose the runtime environment: which configuration is in effect, the
+template-pack status, which agents are installed, and whether the configured
+agent is reachable. Useful as a first step (and as a CI gate).
 
 ## Synopsis
 
@@ -24,10 +22,7 @@ dk doctor [-j --json] [-c --check <id>]
 | `config` | Effective configuration | Resolves `dk.toml` (walking up). Prints the file in effect (or "built-in defaults") and the effective agent/model/output/pack. **Error** if `dk.toml` is unparseable. |
 | `template-pack` | Template pack | Finds a `.dk/` (walking up) containing `templates/review.md`. **Ok** if installed, **Warning** if absent (using embedded defaults). |
 | `installed-agents` | Installed agents | Scans `PATH` for known agent CLIs (`claude`, `codex`, `gemini`, `cursor-agent`, `copilot`, `opencode`). **Ok** if ≥1 found, **Warning** if none. |
-| `agent-reachability` | Configured agent reachability | Resolves the configured agent key, maps it to a binary, checks `PATH`. **Ok** if reachable, **Error** if not, **Skipped** if `dk.toml` can't be parsed. |
-
-`KNOWN_AGENTS` (key→binary) and the `which` / `find_up` helpers live in
-`doctor.rs`.
+| `agent-reachability` | Configured agent reachability | Resolves the configured agent and checks its binary is on `PATH`. **Ok** if reachable, **Error** if not, **Skipped** if `dk.toml` can't be parsed. |
 
 ## Exit code
 
@@ -54,7 +49,9 @@ Text sample:
 
 ## Gotchas
 
-- Checks honor the **current working directory** (config/pack walk-up).
-- "installed-agents" only knows the binaries in `KNOWN_AGENTS`; a custom agent
-  won't be listed even if on `PATH`.
-- The `which` helper checks `is_file()`, not the executable bit.
+- Checks honor the **current working directory** (config and pack are resolved
+  by walking up from it).
+- "installed-agents" only knows a fixed set of well-known agents; a custom agent
+  won't be listed even if it's on `PATH`.
+- Reachability tests that the agent's file is present on `PATH`, not that it's
+  executable.
