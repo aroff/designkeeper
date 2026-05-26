@@ -125,6 +125,7 @@ mod tests {
             why_it_matters: "it matters a lot".to_string(),
             recommended_action: "fix the thing now".to_string(),
             evidence: None,
+            suggested_patch: None,
         }
     }
 

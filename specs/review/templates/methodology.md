@@ -67,3 +67,87 @@ Cap at **{{max_findings}}** findings; prefer blockers and majors.
 - **approve**: mean ≥ 8; no blockers
 
 `overall_score` = rounded mean of evaluated dimensions (exclude `not_evaluated`).
+
+## Focus area sub-rubrics
+
+When a focus area is specified, apply the matching sub-rubric in addition to the standard dimension grades.
+
+### security
+
+Examine: authentication/authorisation checks, input validation, output encoding, secrets management, dependency vulnerabilities, error message leakage, path traversal, injection (SQL, shell, template), CSRF, SSRF.
+
+- **9–10**: All attack surfaces hardened; secrets handled via vault/env; inputs validated at boundary; no known CVEs in added deps.
+- **7–8**: No obvious vulnerabilities; one or two low-severity hygiene issues (e.g. missing rate limit on non-critical endpoint).
+- **5–6**: At least one medium-severity gap (e.g. user-controlled path concatenation without sanitisation).
+- **3–4**: High-severity issue present (e.g. SQL injection, hardcoded secret, unauthenticated privileged endpoint).
+- **0–2**: Critical exploitable vulnerability or deliberate security regression.
+
+### concurrency
+
+Examine: shared mutable state, lock ordering, deadlock potential, race conditions, atomics misuse, async/await cancellation safety, worker pool sizing, idempotency under retries.
+
+- **9–10**: All shared state properly synchronised; no TOCTOU; cancellation safe; idempotency documented.
+- **7–8**: Sound synchronisation; minor concerns (e.g. coarse lock could be narrowed).
+- **5–6**: Potential race under realistic load (e.g. check-then-act on shared resource without lock).
+- **3–4**: Data race or deadlock plausible in production scenarios.
+- **0–2**: Obvious race condition or deadlock that will manifest under normal concurrent use.
+
+### accessibility
+
+Examine: ARIA roles and labels, keyboard navigability, focus management, colour contrast, screen-reader text, form error association, skip links, semantic HTML.
+
+- **9–10**: All interactive elements keyboard-accessible; ARIA used correctly; contrast meets WCAG AA; error messages associated.
+- **7–8**: Mostly accessible; one minor gap (e.g. missing `aria-label` on icon button).
+- **5–6**: Meaningful gap affecting a user group (e.g. modal traps keyboard, missing skip link).
+- **3–4**: Multiple barriers; significant portion of UI unreachable without mouse or with screen reader.
+- **0–2**: Core user flow inaccessible by keyboard or screen reader.
+
+### internationalization
+
+Examine: hard-coded strings vs. i18n key lookup, locale-aware formatting (dates, numbers, currency), RTL layout support, plural forms, character encoding, collation, timezone handling.
+
+- **9–10**: All user-visible strings externalised; locale-aware formatting throughout; RTL tested or explicitly deferred with ticket.
+- **7–8**: Strings externalised; minor formatting gap (e.g. `Date.toLocaleString` not used in one place).
+- **5–6**: Several hard-coded strings or locale-unaware formatting in user-facing paths.
+- **3–4**: Core user-visible text hard-coded; no i18n framework usage in changed files.
+- **0–2**: Active regression (e.g. removes i18n support, breaks encoding).
+
+### privacy
+
+Examine: PII collection minimisation, consent gates, data retention, logging of sensitive fields, encryption at rest/transit, third-party data sharing, GDPR/CCPA compliance signals.
+
+- **9–10**: PII scoped to minimum; encrypted in transit and at rest; not logged; retention policy referenced.
+- **7–8**: Sound privacy posture; one minor logging or retention gap.
+- **5–6**: PII logged or stored longer than necessary without documented justification.
+- **3–4**: Sensitive data exposed in logs, error messages, or unencrypted storage.
+- **0–2**: Privacy regression (e.g. removes consent gate, adds PII to public endpoint response).
+
+### performance
+
+Examine: algorithmic complexity, N+1 queries, cache invalidation, large allocations in hot paths, blocking I/O on async threads, missing indexes, payload sizes, lazy vs. eager loading.
+
+- **9–10**: Hot paths profiled or evidently O(n) or better; queries indexed; payloads bounded.
+- **7–8**: No obvious hotspots; one minor concern (e.g. unnecessary clone in loop).
+- **5–6**: Likely performance issue under realistic load (e.g. N+1 query in list endpoint).
+- **3–4**: Clear algorithmic or I/O problem that will degrade under production traffic.
+- **0–2**: Introduces a known severe regression (e.g. synchronous HTTP call on UI thread, unbounded loop over table scan).
+
+### api_design
+
+Examine: naming consistency, backward compatibility, versioning, error contract, idempotency, pagination, rate-limit headers, HTTP method/status semantics, SDK ergonomics.
+
+- **9–10**: Consistent naming; backward-compatible; errors machine-readable; idempotency documented; follows project API style.
+- **7–8**: Sound design; minor naming inconsistency or missing rate-limit header.
+- **5–6**: Breaking change without version bump, or error contract unclear.
+- **3–4**: Multiple breaking changes, or API shape conflicts with project conventions.
+- **0–2**: Fundamentally unusable or removes a public contract without migration path.
+
+### ui
+
+Examine: layout correctness across breakpoints, loading/error/empty states, accessibility (see sub-rubric), animation jank, form validation UX, responsive images, touch targets.
+
+- **9–10**: All states handled; responsive; touch targets ≥ 44 px; animations respect `prefers-reduced-motion`.
+- **7–8**: Correct on target breakpoints; one minor visual gap (e.g. missing empty state).
+- **5–6**: Layout breaks on a common viewport or a state (loading/error) is unhandled.
+- **3–4**: Multiple layout regressions or missing critical states affecting user comprehension.
+- **0–2**: Core UI flow broken or completely unusable on a primary device class.

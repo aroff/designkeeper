@@ -15,6 +15,7 @@
 pub mod check;
 pub mod config;
 pub mod discovery;
+pub mod git;
 pub mod init;
 pub mod pack;
 pub mod pipeline;
