@@ -256,7 +256,11 @@ fn numbered_list(items: &[String]) -> String {
 mod tests {
     use super::*;
     use crate::config::default_config;
-    use crate::review::{ChangeContext, FocusArea, ReviewOptions};
+    use crate::review::{
+        ChangeContext, Dimension, Finding, FocusArea, ReviewOptions, ReviewOutput, Severity,
+        Summary, Verdict,
+    };
+    use std::collections::BTreeMap;
     use tempfile::tempdir;
 
     fn input_with(working_dir: &str) -> ReviewInput {
@@ -339,5 +343,75 @@ mod tests {
         input.target = None;
         let slots = build_prompt_slots(&input, &default_config(), pack_dir.path()).unwrap();
         assert_eq!(slots["target"], "a.rs");
+    }
+
+    #[test]
+    fn dimensions_filter_with_some_emits_only_clause() {
+        let pack_dir = tempdir().unwrap();
+        pack::write_default_pack(pack_dir.path()).unwrap();
+        let wd = tempdir().unwrap();
+        let mut input = input_with(wd.path().to_str().unwrap());
+        input.options.include_dimensions = Some(vec![Dimension::Design, Dimension::Tests]);
+        let slots = build_prompt_slots(&input, &default_config(), pack_dir.path()).unwrap();
+        let filter = &slots["dimensions_filter"];
+        assert!(filter.contains("ONLY"), "expected ONLY in: {filter}");
+        assert!(filter.contains("design"), "expected 'design' in: {filter}");
+        assert!(filter.contains("tests"), "expected 'tests' in: {filter}");
+    }
+
+    fn minimal_output_with_finding(finding: Finding) -> ReviewOutput {
+        ReviewOutput {
+            summary: Summary {
+                verdict: Verdict::Approve,
+                overall_score: 7.0,
+                one_paragraph: "ok".to_string(),
+            },
+            grades: BTreeMap::new(),
+            overall_score: 7.0,
+            good_things: vec![],
+            findings: vec![finding],
+            limitations: vec![],
+            suggested_next_steps: vec![],
+        }
+    }
+
+    fn base_finding() -> Finding {
+        Finding {
+            id: "design-001".to_string(),
+            dimension: Dimension::Design,
+            severity: Severity::Minor,
+            location: "src/main.rs:1".to_string(),
+            observation: "obs".to_string(),
+            why_it_matters: "why".to_string(),
+            recommended_action: "action".to_string(),
+            evidence: None,
+            suggested_patch: None,
+        }
+    }
+
+    #[test]
+    fn format_findings_with_suggested_patch_includes_fenced_block() {
+        let mut f = base_finding();
+        f.suggested_patch = Some("patch text".to_string());
+        let output = minimal_output_with_finding(f);
+        let rendered = format_findings(&output);
+        assert!(
+            rendered.contains("patch text"),
+            "expected 'patch text' in: {rendered}"
+        );
+        assert!(
+            rendered.contains("```suggestion"),
+            "expected fenced block in: {rendered}"
+        );
+    }
+
+    #[test]
+    fn format_findings_without_suggested_patch_has_no_fenced_block() {
+        let output = minimal_output_with_finding(base_finding());
+        let rendered = format_findings(&output);
+        assert!(
+            !rendered.contains("```suggestion"),
+            "unexpected fenced block in: {rendered}"
+        );
     }
 }
