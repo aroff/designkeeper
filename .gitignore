@@ -21,3 +21,10 @@ Thumbs.db
 # Logs / env
 *.log
 .env
+
+# tools and agents
+.dk
+.claude
+.newton
+tmp
+specs

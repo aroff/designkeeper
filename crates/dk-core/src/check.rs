@@ -31,12 +31,13 @@ pub fn run_check(
     config: &DkConfig,
     template_dir: &Path,
     verbose: bool,
+    progress: &crate::pipeline::ProgressFn,
 ) -> CheckResult {
     let agent = crate::pipeline::SubprocessAgent {
         agent: config.agent.agent.clone(),
         model: config.agent.model.clone(),
     };
-    run_check_with_agent(input, config, template_dir, verbose, &agent)
+    run_check_with_agent(input, config, template_dir, verbose, &agent, progress)
 }
 
 /// Run `check` against an injected agent (used by tests).
@@ -46,8 +47,9 @@ pub fn run_check_with_agent(
     template_dir: &Path,
     verbose: bool,
     agent: &dyn AgentRunner,
+    progress: &crate::pipeline::ProgressFn,
 ) -> CheckResult {
-    match review::run_review_with_agent(input, config, template_dir, agent) {
+    match review::run_review_with_agent(input, config, template_dir, agent, progress) {
         Ok(output) => {
             let passed = output.summary.verdict.is_pass();
             let report = if verbose {
@@ -168,6 +170,7 @@ mod tests {
             pack_dir.path(),
             false,
             &agent,
+            &|_| {},
         );
         assert!(res.passed);
         assert!(res.findings_summary.is_none());
@@ -183,6 +186,7 @@ mod tests {
             pack_dir.path(),
             false,
             &agent,
+            &|_| {},
         );
         assert!(!res.passed);
         assert_eq!(res.fail_code, Some("DK_CHECK_FAILED"));
@@ -203,6 +207,7 @@ mod tests {
             pack_dir.path(),
             true,
             &agent,
+            &|_| {},
         );
         assert!(res.report.is_some());
         assert!(res.report.unwrap().contains("Code review grade report"));
