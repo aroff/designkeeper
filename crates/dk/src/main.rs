@@ -22,7 +22,7 @@ use dk_core::config::{default_config, resolve_config, DkConfig, OutputFormat};
 use dk_core::pipeline::Progress;
 use dk_core::{pack, review, run_check, ReviewInput, ReviewOptions};
 use dk_core::{run_init, InitParams};
-use dk_core::{ChangeContext, FocusArea};
+use dk_core::{ChangeContext, Dimension, FocusArea};
 
 struct DkContext;
 impl AppContext for DkContext {}
@@ -81,6 +81,16 @@ fn review_command() -> Command {
         ),
         opt("base-ref", None, "Base git ref, e.g. main"),
         opt("head-ref", None, "Head git ref, e.g. HEAD"),
+        opt(
+            "from-git",
+            None,
+            "Derive PR context from git using <base-ref> as the merge base",
+        ),
+        opt(
+            "include-dimensions",
+            None,
+            "Comma-separated dimensions to grade (all others → not_evaluated)",
+        ),
         ArgSpec {
             name: "focus",
             kind: ArgKind::Option,
@@ -147,6 +157,11 @@ fn check_command() -> Command {
         requires: vec![],
         help: "Print the full scored report to stdout",
     });
+    args.push(opt(
+        "from-git",
+        None,
+        "Derive PR context from git using <base-ref> as the merge base",
+    ));
     args.push(positional_path());
     let spec = CommandSpec {
         summary: "Pass/fail review gate (verdict -> exit code)",
@@ -207,6 +222,30 @@ fn common_args() -> Vec<ArgSpec> {
             None,
             "Write output to this file instead of stdout",
         ),
+        ArgSpec {
+            name: "timeout",
+            kind: ArgKind::Option,
+            short: None,
+            long: None,
+            value_type: ArgValueType::Int,
+            cardinality: Cardinality::Optional,
+            default: None,
+            conflicts_with: vec![],
+            requires: vec![],
+            help: "Agent timeout in seconds (0 = no timeout)",
+        },
+        ArgSpec {
+            name: "max-retries",
+            kind: ArgKind::Option,
+            short: None,
+            long: None,
+            value_type: ArgValueType::Int,
+            cardinality: Cardinality::Optional,
+            default: None,
+            conflicts_with: vec![],
+            requires: vec![],
+            help: "Max retry attempts after first failure (default 2)",
+        },
     ]
 }
 
@@ -235,7 +274,7 @@ fn run_review_cmd(args: CommandArgs) -> anyhow::Result<()> {
         Ok(c) => c,
         Err(msg) => fail("DK_CONFIG_PARSE", &msg),
     };
-    let input = match map_input(&args, &cwd) {
+    let input = match map_input(&args, &cwd, &config) {
         Ok(i) => i,
         Err(msg) => fail("DK_INPUT_VALIDATION", &msg),
     };
@@ -274,7 +313,7 @@ fn run_check_cmd(args: CommandArgs) -> anyhow::Result<()> {
         Ok(c) => c,
         Err(msg) => fail("DK_CONFIG_PARSE", &msg),
     };
-    let input = match map_input(&args, &cwd) {
+    let input = match map_input(&args, &cwd, &config) {
         Ok(i) => i,
         Err(msg) => fail("DK_INPUT_VALIDATION", &msg),
     };
@@ -285,7 +324,9 @@ fn run_check_cmd(args: CommandArgs) -> anyhow::Result<()> {
     let verbose = flag(&args, "verbose");
 
     let reporter = ProgressReporter::new(&config.agent.agent);
-    let result = run_check(input, &config, &template_dir, verbose, &|e| reporter.handle(e));
+    let result = run_check(input, &config, &template_dir, verbose, &|e| {
+        reporter.handle(e)
+    });
     reporter.finish();
     if let Some(report) = &result.report {
         if let Err(e) = emit(&args, report) {
@@ -306,7 +347,11 @@ fn run_init_cmd(args: CommandArgs) -> anyhow::Result<()> {
 
     let agent = prompt_or_default(args.named.get("agent"), "Agent", &existing.agent.agent);
     let model_default = existing.agent.model.as_deref().unwrap_or("");
-    let model_raw = prompt_or_default(args.named.get("model"), "Model (blank for none)", model_default);
+    let model_raw = prompt_or_default(
+        args.named.get("model"),
+        "Model (blank for none)",
+        model_default,
+    );
     let model = Some(model_raw).filter(|m| !m.trim().is_empty());
     let pack = prompt_or_default(
         args.named.get("template-pack"),
@@ -328,7 +373,10 @@ fn run_init_cmd(args: CommandArgs) -> anyhow::Result<()> {
     println!("{verb} {}", outcome.config_path.display());
     match &outcome.pack_source {
         dk_core::PackSource::Embedded => {
-            println!("Installed default template pack at {}", outcome.dk_dir.display());
+            println!(
+                "Installed default template pack at {}",
+                outcome.dk_dir.display()
+            );
         }
         dk_core::PackSource::LocalDir(src) => {
             println!(
@@ -379,6 +427,18 @@ fn resolved_config(args: &CommandArgs, cwd: &Path) -> Result<DkConfig, String> {
     if let Some(model) = args.named.get("model") {
         config.agent.model = Some(model.clone());
     }
+    if let Some(s) = args.named.get("timeout") {
+        let n: u64 = s
+            .parse::<u64>()
+            .map_err(|_| format!("invalid --timeout: {s}"))?;
+        config.agent.timeout_secs = if n == 0 { None } else { Some(n) };
+    }
+    if let Some(s) = args.named.get("max-retries") {
+        let n: u32 = s
+            .parse::<u32>()
+            .map_err(|_| format!("invalid --max-retries: {s}"))?;
+        config.agent.max_retries = Some(n);
+    }
     Ok(config)
 }
 
@@ -394,13 +454,52 @@ fn output_format(args: &CommandArgs, config: &DkConfig) -> OutputFormat {
     }
 }
 
-fn map_input(args: &CommandArgs, cwd: &Path) -> Result<ReviewInput, String> {
-    let target = args.named.get("path").cloned();
+fn map_input(args: &CommandArgs, cwd: &Path, config: &DkConfig) -> Result<ReviewInput, String> {
+    // --from-git: derive PR context from git (explicit flags override derived values)
+    let from_git = args.named.get("from-git").cloned();
 
-    let title = args.named.get("title").cloned();
-    let description = args.named.get("description").map(|d| read_file_or_text(d));
-    let base_ref = args.named.get("base-ref").cloned();
-    let head_ref = args.named.get("head-ref").cloned();
+    let mut git_title: Option<String> = None;
+    let mut git_description: Option<String> = None;
+    let mut git_base_ref: Option<String> = None;
+    let mut git_head_ref: Option<String> = None;
+    let mut git_diff_stat: Option<String> = None;
+    let mut git_target: Option<String> = None;
+
+    if let Some(ref base) = from_git {
+        git_base_ref = Some(base.clone());
+        git_head_ref = Some("HEAD".to_string());
+        git_title = dk_core::git::log_format(cwd, "%s", "HEAD");
+        git_description = dk_core::git::log_format(cwd, "%b", "HEAD");
+        git_diff_stat = dk_core::git::diff_stat(cwd, base, "HEAD");
+        if let Some(files) = dk_core::git::changed_files(cwd, base, "HEAD") {
+            let exts = &config.scan.extensions;
+            let filtered: Vec<String> = files
+                .into_iter()
+                .filter(|f| exts.iter().any(|ext| f.ends_with(ext.as_str())))
+                .collect();
+            if !filtered.is_empty() {
+                git_target = Some(filtered.join("\n"));
+            }
+        }
+    }
+
+    // Explicit flags override git-derived values
+    let title = args.named.get("title").cloned().or(git_title);
+    let description = args
+        .named
+        .get("description")
+        .map(|d| read_file_or_text(d))
+        .or(git_description);
+    let base_ref = args.named.get("base-ref").cloned().or(git_base_ref);
+    let head_ref = args.named.get("head-ref").cloned().or(git_head_ref);
+
+    // Auto-populate diff_stat when both refs are present (G4)
+    let diff_stat = if let (Some(base), Some(head)) = (&base_ref, &head_ref) {
+        git_diff_stat.or_else(|| dk_core::git::diff_stat(cwd, base, head))
+    } else {
+        git_diff_stat
+    };
+
     let change_context =
         if title.is_some() || description.is_some() || base_ref.is_some() || head_ref.is_some() {
             Some(ChangeContext {
@@ -408,11 +507,14 @@ fn map_input(args: &CommandArgs, cwd: &Path) -> Result<ReviewInput, String> {
                 description,
                 base_ref,
                 head_ref,
-                diff_stat: None,
+                diff_stat,
             })
         } else {
             None
         };
+
+    // Explicit path arg overrides git-derived target
+    let target = args.named.get("path").cloned().or(git_target);
 
     let focus = match args.named.get("focus") {
         Some(s) => s
@@ -436,6 +538,25 @@ fn map_input(args: &CommandArgs, cwd: &Path) -> Result<ReviewInput, String> {
         None => 25,
     };
 
+    let include_dimensions = match args.named.get("include-dimensions") {
+        Some(s) => {
+            let dims = s
+                .split(',')
+                .filter(|x| !x.is_empty())
+                .map(|x| {
+                    Dimension::parse(x)
+                        .ok_or_else(|| format!("invalid --include-dimensions value: {x}"))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            if dims.is_empty() {
+                None
+            } else {
+                Some(dims)
+            }
+        }
+        None => None,
+    };
+
     Ok(ReviewInput {
         working_dir: cwd.to_string_lossy().into_owned(),
         target,
@@ -444,7 +565,7 @@ fn map_input(args: &CommandArgs, cwd: &Path) -> Result<ReviewInput, String> {
         project_hints: None,
         options: ReviewOptions {
             max_findings,
-            include_dimensions: None,
+            include_dimensions,
         },
     })
 }
@@ -483,7 +604,12 @@ fn ensure_template_dir(cwd: &Path) -> Result<PathBuf, std::io::Error> {
 /// Write `content` to `--output-file` if set, otherwise to stdout.
 fn emit(args: &CommandArgs, content: &str) -> Result<(), std::io::Error> {
     match args.named.get("output-file") {
-        Some(path) => std::fs::write(path, content),
+        Some(path) => {
+            if let Some(parent) = Path::new(path).parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(path, content)
+        }
         None => {
             println!("{content}");
             Ok(())
@@ -647,7 +773,7 @@ mod tests {
             &[],
         );
         let cwd = std::env::temp_dir();
-        let input = map_input(&a, &cwd).unwrap();
+        let input = map_input(&a, &cwd, &default_config()).unwrap();
         let cc = input.change_context.unwrap();
         assert_eq!(cc.title.as_deref(), Some("T"));
         assert_eq!(cc.description.as_deref(), Some("raw body"));
@@ -658,8 +784,37 @@ mod tests {
     #[test]
     fn map_input_rejects_bad_focus_and_range() {
         let cwd = std::env::temp_dir();
-        assert!(map_input(&args(&[("focus", "nope")], &[]), &cwd).is_err());
-        assert!(map_input(&args(&[("max-findings", "99")], &[]), &cwd).is_err());
+        assert!(map_input(&args(&[("focus", "nope")], &[]), &cwd, &default_config()).is_err());
+        assert!(map_input(
+            &args(&[("max-findings", "99")], &[]),
+            &cwd,
+            &default_config()
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn map_input_include_dimensions_rejects_invalid() {
+        let cwd = std::env::temp_dir();
+        assert!(map_input(
+            &args(&[("include-dimensions", "nope")], &[]),
+            &cwd,
+            &default_config()
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn map_input_include_dimensions_valid() {
+        let cwd = std::env::temp_dir();
+        let input = map_input(
+            &args(&[("include-dimensions", "design,tests")], &[]),
+            &cwd,
+            &default_config(),
+        )
+        .unwrap();
+        let dims = input.options.include_dimensions.unwrap();
+        assert_eq!(dims.len(), 2);
     }
 
     #[test]
