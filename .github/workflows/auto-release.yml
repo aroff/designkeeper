@@ -41,7 +41,7 @@ jobs:
       - name: Checkout aikit dependency
         run: |
           mkdir -p "${{ github.workspace }}/../../goaikit"
-          git clone https://x-access-token:${{ secrets.GOAIKIT_TOKEN }}@github.com/goaikit/aikit.git "${{ github.workspace }}/../../goaikit/aikit"
+          git clone https://github.com/goaikit/aikit.git "${{ github.workspace }}/../../goaikit/aikit"
 
       - name: Check for no-release label
         id: check-label
