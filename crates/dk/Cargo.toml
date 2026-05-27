@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 dk-core = { path = "../dk-core" }
 aikit-sdk.workspace = true
+openssl.workspace = true
 cli-framework = { path = "../../../cli-framework", features = ["doctor", "mcp-server"] }
 tokio.workspace = true
 tracing.workspace = true
