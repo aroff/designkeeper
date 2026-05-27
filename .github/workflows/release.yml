@@ -138,6 +138,8 @@ jobs:
         run: cross build --release --verbose --target ${{ matrix.target }}
         env:
           RUSTFLAGS: ""
+          OPENSSL_STATIC: "1"
+          OPENSSL_VENDORED: "1"
 
       - name: Build release binary (cargo)
         if: ${{ !matrix.use-cross }}
