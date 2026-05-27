@@ -1,0 +1,411 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 1.2.3)'
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  RUST_BACKTRACE: 1
+
+permissions:
+  contents: write
+
+jobs:
+  verify-version:
+    name: Verify Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.extract-version.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag or input
+        id: extract-version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            TAG_VERSION="${{ github.ref_name }}"
+            VERSION="${TAG_VERSION#v}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Extracted version: $VERSION"
+
+      - name: Read version from Cargo.toml
+        id: cargo-version
+        run: |
+          CARGO_VERSION=$(grep '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+          echo "cargo-version=$CARGO_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Cargo.toml version: $CARGO_VERSION"
+
+      - name: Verify versions match
+        run: |
+          TAG_VER="${{ steps.extract-version.outputs.version }}"
+          CARGO_VER="${{ steps.cargo-version.outputs.cargo-version }}"
+
+          if [[ "$TAG_VER" == *"-"* ]]; then
+            echo "Skipping version check for pre-release tag: $TAG_VER"
+          elif [ "$TAG_VER" != "$CARGO_VER" ]; then
+            echo "Version mismatch: tag=$TAG_VER Cargo.toml=$CARGO_VER"
+            exit 1
+          else
+            echo "Versions match: $TAG_VER"
+          fi
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: verify-version
+    runs-on: ${{ matrix.os }}
+    env:
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: url.https://x-access-token:${{ secrets.CLI_FRAMEWORK_TOKEN }}@github.com/aroff/cli-framework.git.insteadOf
+      GIT_CONFIG_VALUE_0: https://github.com/aroff/cli-framework.git
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary-name: dk
+            archive-format: tar.gz
+            archive-name: designkeeper-x86_64-unknown-linux-gnu.tar.gz
+            use-cross: false
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            binary-name: dk
+            archive-format: tar.gz
+            archive-name: designkeeper-x86_64-unknown-linux-musl.tar.gz
+            use-cross: true
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary-name: dk.exe
+            archive-format: zip
+            archive-name: designkeeper-x86_64-pc-windows-msvc.zip
+            use-cross: false
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary-name: dk
+            archive-format: tar.gz
+            archive-name: designkeeper-aarch64-apple-darwin.tar.gz
+            use-cross: false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Checkout cli-framework dependency
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.CLI_FRAMEWORK_TOKEN }}@github.com/aroff/cli-framework.git".insteadOf "https://github.com/aroff/cli-framework.git"
+          git clone https://x-access-token:${{ secrets.CLI_FRAMEWORK_TOKEN }}@github.com/aroff/cli-framework.git "${{ github.workspace }}/../cli-framework"
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt, clippy
+          target: ${{ matrix.target }}
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install cross-rs
+        if: matrix.use-cross
+        run: cargo install cross --version 0.2.5 --locked
+
+      - name: Build release binary (cross)
+        if: matrix.use-cross
+        run: cross build --release --verbose --target ${{ matrix.target }}
+        env:
+          RUSTFLAGS: ""
+
+      - name: Build release binary (cargo)
+        if: ${{ !matrix.use-cross }}
+        run: cargo build --release --verbose --target ${{ matrix.target }}
+        env:
+          RUSTFLAGS: ""
+
+      - name: Create release archive
+        shell: bash
+        run: |
+          mkdir -p release
+          cp target/${{ matrix.target }}/release/${{ matrix.binary-name }} release/
+          cd release
+          if [ "${{ matrix.archive-format }}" = "tar.gz" ]; then
+            tar -czf "../${{ matrix.archive-name }}" *
+          else
+            if [ "${{ runner.os }}" = "Windows" ]; then
+              powershell -Command "Compress-Archive -Path * -DestinationPath ../${{ matrix.archive-name }} -Force"
+            else
+              zip -r "../${{ matrix.archive-name }}" *
+            fi
+          fi
+          cd ..
+          ls -lh "${{ matrix.archive-name }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive-name }}
+          path: ${{ matrix.archive-name }}
+          retention-days: 30
+
+  create-release:
+    name: Create GitHub Release
+    needs: [verify-version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum \
+            designkeeper-x86_64-unknown-linux-gnu.tar.gz \
+            designkeeper-x86_64-unknown-linux-musl.tar.gz \
+            designkeeper-x86_64-pc-windows-msvc.zip \
+            designkeeper-aarch64-apple-darwin.tar.gz \
+            | sort > checksums.txt
+          cat checksums.txt
+
+      - name: Generate release notes
+        run: |
+          VERSION="${{ needs.verify-version.outputs.version }}"
+          TAG="v${VERSION}"
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+          {
+            if [ -n "$PREV_TAG" ]; then
+              echo "## Changes since $PREV_TAG"
+              echo
+              git log --pretty=format:"- %s (%h)" "${PREV_TAG}..${TAG}" || true
+            else
+              echo "## Release $VERSION"
+              echo
+              echo "- Initial release"
+            fi
+            echo
+            echo "## Installation"
+            echo
+            echo "Download the binary for your platform and add it to your PATH."
+            echo
+            echo "| Platform | Archive |"
+            echo "|----------|---------|"
+            echo "| Linux (glibc) | \`designkeeper-x86_64-unknown-linux-gnu.tar.gz\` |"
+            echo "| Linux (musl/static) | \`designkeeper-x86_64-unknown-linux-musl.tar.gz\` |"
+            echo "| macOS Apple Silicon | \`designkeeper-aarch64-apple-darwin.tar.gz\` |"
+            echo "| Windows | \`designkeeper-x86_64-pc-windows-msvc.zip\` |"
+            echo
+            echo "SHA256 checksums are in \`checksums.txt\`."
+          } > release_notes.md
+          cat release_notes.md
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: v${{ needs.verify-version.outputs.version }}
+          name: designkeeper ${{ needs.verify-version.outputs.version }}
+          body_path: release_notes.md
+          files: |
+            artifacts/designkeeper-x86_64-unknown-linux-gnu.tar.gz
+            artifacts/designkeeper-x86_64-unknown-linux-musl.tar.gz
+            artifacts/designkeeper-x86_64-pc-windows-msvc.zip
+            artifacts/designkeeper-aarch64-apple-darwin.tar.gz
+            artifacts/checksums.txt
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+          generate_release_notes: false
+
+  update-package-managers:
+    name: Update Package Managers
+    needs: [verify-version, create-release]
+    runs-on: ubuntu-latest
+    # DISTRIB_TOKEN must be a fine-grained PAT with Contents:write on aroff/homebrew-cli
+    # and aroff/scoop-bucket, and Actions:write on aroff/homebrew-cli.
+    if: success()
+    permissions:
+      contents: read
+    env:
+      DISTRIB_TOKEN: ${{ secrets.DISTRIB_TOKEN }}
+
+    steps:
+      - name: Check package manager token
+        id: package-token
+        run: |
+          if [ -z "$DISTRIB_TOKEN" ]; then
+            echo "::notice::DISTRIB_TOKEN is not configured; skipping package manager updates"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dependencies
+        if: steps.package-token.outputs.available == 'true'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q jq
+
+      # ── Homebrew ────────────────────────────────────────────────────────────
+
+      - name: Checkout homebrew-cli repo
+        if: steps.package-token.outputs.available == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: aroff/homebrew-cli
+          path: homebrew-cli
+          token: ${{ env.DISTRIB_TOKEN }}
+
+      - name: Regenerate Homebrew formula
+        if: steps.package-token.outputs.available == 'true'
+        run: |
+          cd homebrew-cli
+          chmod +x generate_formula.sh
+          ./generate_formula.sh --tool designkeeper --version ${{ needs.verify-version.outputs.version }}
+        env:
+          GH_TOKEN: ${{ env.DISTRIB_TOKEN }}
+
+      - name: Push formula to validation branch
+        if: steps.package-token.outputs.available == 'true'
+        id: hb-branch
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.verify-version.outputs.version }}"
+          BRANCH="ci/release-designkeeper-v${VERSION}-${{ github.run_id }}"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+          cd homebrew-cli
+
+          if git diff --quiet && git diff --staged --quiet; then
+            echo "Formula unchanged — nothing to do"
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git checkout -B "$BRANCH"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/designkeeper.rb
+          git commit -m "chore: update designkeeper to v${VERSION}"
+          git push "https://x-access-token:${DISTRIB_TOKEN}@github.com/aroff/homebrew-cli.git" "$BRANCH"
+          echo "has_changes=true" >> "$GITHUB_OUTPUT"
+
+      - name: Trigger validate-formula CI on branch
+        if: steps.package-token.outputs.available == 'true' && steps.hb-branch.outputs.has_changes == 'true'
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.verify-version.outputs.version }}"
+          BRANCH="${{ steps.hb-branch.outputs.branch }}"
+
+          gh workflow run validate-formula.yml \
+            --repo aroff/homebrew-cli \
+            --ref "$BRANCH" \
+            -f version="$VERSION" \
+            -f tool="designkeeper"
+
+          RUN_ID=""
+          for i in $(seq 1 60); do
+            RUN_ID=$(gh run list \
+              --repo aroff/homebrew-cli \
+              --workflow validate-formula.yml \
+              --event workflow_dispatch \
+              --json databaseId,headBranch \
+              -q ".[] | select(.headBranch == \"$BRANCH\") | .databaseId" \
+              | head -n 1)
+            [ -n "$RUN_ID" ] && break
+            echo "Waiting for run to appear (attempt $i/60)..."
+            sleep 10
+          done
+
+          if [ -z "$RUN_ID" ]; then
+            echo "Timed out waiting for validate-formula run on branch $BRANCH"
+            exit 1
+          fi
+
+          echo "Found validate-formula run $RUN_ID — waiting for completion..."
+          gh run watch "$RUN_ID" --repo aroff/homebrew-cli --exit-status
+        env:
+          GH_TOKEN: ${{ env.DISTRIB_TOKEN }}
+
+      - name: Merge validated branch to main
+        if: steps.package-token.outputs.available == 'true' && steps.hb-branch.outputs.has_changes == 'true'
+        run: |
+          set -euo pipefail
+          BRANCH="${{ steps.hb-branch.outputs.branch }}"
+          REMOTE="https://x-access-token:${DISTRIB_TOKEN}@github.com/aroff/homebrew-cli.git"
+
+          cd homebrew-cli
+          git fetch origin main "$BRANCH"
+          git checkout main
+          git merge --ff-only "origin/$BRANCH"
+          git push "$REMOTE" main
+          git push "$REMOTE" --delete "$BRANCH"
+          echo "Homebrew formula merged to main and branch $BRANCH deleted"
+        env:
+          GH_TOKEN: ${{ env.DISTRIB_TOKEN }}
+
+      # ── Scoop ────────────────────────────────────────────────────────────────
+
+      - name: Checkout scoop-bucket repo
+        if: steps.package-token.outputs.available == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: aroff/scoop-bucket
+          path: scoop-bucket
+          token: ${{ env.DISTRIB_TOKEN }}
+
+      - name: Regenerate Scoop manifest
+        if: steps.package-token.outputs.available == 'true'
+        run: |
+          cd scoop-bucket
+          chmod +x generate_manifest.sh
+          ./generate_manifest.sh --tool designkeeper --version ${{ needs.verify-version.outputs.version }}
+        env:
+          GH_TOKEN: ${{ env.DISTRIB_TOKEN }}
+
+      - name: Push Scoop manifest to main
+        if: steps.package-token.outputs.available == 'true'
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.verify-version.outputs.version }}"
+          cd scoop-bucket
+
+          if git diff --quiet && git diff --staged --quiet; then
+            echo "Scoop manifest unchanged — nothing to do"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add bucket/designkeeper.json
+          git commit -m "chore: update designkeeper to v${VERSION}"
+          git push "https://x-access-token:${DISTRIB_TOKEN}@github.com/aroff/scoop-bucket.git" main
+          echo "Scoop manifest pushed to main"
