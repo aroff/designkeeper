@@ -38,6 +38,11 @@ jobs:
           git config --global url."https://x-access-token:${{ secrets.CLI_FRAMEWORK_TOKEN }}@github.com/aroff/cli-framework.git".insteadOf "https://github.com/aroff/cli-framework.git"
           git clone https://x-access-token:${{ secrets.CLI_FRAMEWORK_TOKEN }}@github.com/aroff/cli-framework.git "${{ github.workspace }}/../cli-framework"
 
+      - name: Checkout aikit dependency
+        run: |
+          mkdir -p "${{ github.workspace }}/../../goaikit"
+          git clone https://x-access-token:${{ secrets.GOAIKIT_TOKEN }}@github.com/goaikit/aikit.git "${{ github.workspace }}/../../goaikit/aikit"
+
       - name: Check for no-release label
         id: check-label
         run: |
