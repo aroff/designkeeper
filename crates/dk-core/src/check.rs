@@ -3,9 +3,10 @@
 use std::path::Path;
 use std::process::ExitCode;
 
+use aikit_sdk::AgentRunner;
+
 use crate::config::DkConfig;
-use crate::pipeline::AgentRunner;
-use crate::review::{self, ReviewInput, ReviewOutput, Severity};
+use crate::review::{self, build_agent_runner, ReviewInput, ReviewOutput, Severity};
 
 /// Result of a `dk check` run.
 pub struct CheckResult {
@@ -25,7 +26,7 @@ pub struct CheckResult {
     pub fail_code: Option<&'static str>,
 }
 
-/// Run `check` using the real subprocess agent from `config`.
+/// Run `check` using the real agent from `config`.
 pub fn run_check(
     input: ReviewInput,
     config: &DkConfig,
@@ -33,27 +34,20 @@ pub fn run_check(
     verbose: bool,
     progress: &crate::pipeline::ProgressFn,
 ) -> CheckResult {
-    let agent = crate::pipeline::SubprocessAgent {
-        agent: config.agent.agent.clone(),
-        model: config.agent.model.clone(),
-        timeout: config
-            .agent
-            .timeout_secs
-            .map(std::time::Duration::from_secs),
-    };
-    run_check_with_agent(input, config, template_dir, verbose, &agent, progress)
+    let runner = build_agent_runner(config, &input);
+    run_check_with_runner(input, config, template_dir, verbose, runner, progress)
 }
 
-/// Run `check` against an injected agent (used by tests).
-pub fn run_check_with_agent(
+/// Run `check` against an injected `AgentRunner` (used by tests).
+pub fn run_check_with_runner(
     input: ReviewInput,
     config: &DkConfig,
     template_dir: &Path,
     verbose: bool,
-    agent: &dyn AgentRunner,
+    runner: AgentRunner,
     progress: &crate::pipeline::ProgressFn,
 ) -> CheckResult {
-    match review::run_review_with_agent(input, config, template_dir, agent, progress) {
+    match review::run_review_with_runner(input, config, template_dir, runner, progress) {
         Ok(output) => {
             let passed = output.summary.verdict.is_pass();
             let report = if verbose {
@@ -75,11 +69,7 @@ pub fn run_check_with_agent(
                 passed,
                 report,
                 findings_summary,
-                fail_code: if passed {
-                    None
-                } else {
-                    Some("DK_CHECK_FAILED")
-                },
+                fail_code: if passed { None } else { Some("DK_CHECK_FAILED") },
             }
         }
         Err(err) => CheckResult {
@@ -126,16 +116,8 @@ mod tests {
     use super::*;
     use crate::config::default_config;
     use crate::pack;
-    use crate::pipeline::{AgentRunner, PipelineError};
     use std::path::PathBuf;
     use tempfile::tempdir;
-
-    struct CannedAgent(String);
-    impl AgentRunner for CannedAgent {
-        fn run(&self, _prompt: &str, _wd: &Path) -> Result<String, PipelineError> {
-            Ok(format!("```json\n{}\n```", self.0))
-        }
-    }
 
     fn fixture(name: &str) -> String {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -167,13 +149,14 @@ mod tests {
     #[test]
     fn approve_exits_pass() {
         let (pack_dir, wd) = setup();
-        let agent = CannedAgent(fixture("approve.json"));
-        let res = run_check_with_agent(
+        let raw = fixture("approve.json");
+        let (runner, _) = AgentRunner::with_mock(vec![Ok(format!("```json\n{raw}\n```"))]);
+        let res = run_check_with_runner(
             input_for(wd.path()),
             &default_config(),
             pack_dir.path(),
             false,
-            &agent,
+            runner,
             &|_| {},
         );
         assert!(res.passed);
@@ -183,19 +166,19 @@ mod tests {
     #[test]
     fn request_changes_exits_fail_with_summary() {
         let (pack_dir, wd) = setup();
-        let agent = CannedAgent(fixture("request-changes.json"));
-        let res = run_check_with_agent(
+        let raw = fixture("request-changes.json");
+        let (runner, _) = AgentRunner::with_mock(vec![Ok(format!("```json\n{raw}\n```"))]);
+        let res = run_check_with_runner(
             input_for(wd.path()),
             &default_config(),
             pack_dir.path(),
             false,
-            &agent,
+            runner,
             &|_| {},
         );
         assert!(!res.passed);
         assert_eq!(res.fail_code, Some("DK_CHECK_FAILED"));
         let summary = res.findings_summary.unwrap();
-        // Blockers must come before majors in the grouped summary.
         let blocker_pos = summary.find("blocker").unwrap();
         let major_pos = summary.find("major").unwrap();
         assert!(blocker_pos < major_pos);
@@ -204,13 +187,14 @@ mod tests {
     #[test]
     fn verbose_produces_report() {
         let (pack_dir, wd) = setup();
-        let agent = CannedAgent(fixture("approve.json"));
-        let res = run_check_with_agent(
+        let raw = fixture("approve.json");
+        let (runner, _) = AgentRunner::with_mock(vec![Ok(format!("```json\n{raw}\n```"))]);
+        let res = run_check_with_runner(
             input_for(wd.path()),
             &default_config(),
             pack_dir.path(),
             true,
-            &agent,
+            runner,
             &|_| {},
         );
         assert!(res.report.is_some());

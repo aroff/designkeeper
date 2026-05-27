@@ -6,21 +6,12 @@
 
 use std::path::{Path, PathBuf};
 
+use aikit_sdk::agent_runner::AgentDetector;
 use cli_framework::doctor::{CheckSeverity, DoctorCheck, DoctorFinding, DoctorFuture};
 use cli_framework::prelude::AppContext;
 
 use dk_core::config::resolve_config;
 use dk_core::pack;
-
-/// Known agent keys mapped to the CLI binary we expect on `PATH`.
-const KNOWN_AGENTS: &[(&str, &str)] = &[
-    ("claude", "claude"),
-    ("codex", "codex"),
-    ("gemini", "gemini"),
-    ("cursor-agent", "cursor-agent"),
-    ("copilot", "copilot"),
-    ("opencode", "opencode"),
-];
 
 /// All `dk` doctor checks, ready to hand to `DoctorModule::new`.
 pub fn checks() -> Vec<std::sync::Arc<dyn DoctorCheck>> {
@@ -183,29 +174,24 @@ impl DoctorCheck for InstalledAgentsCheck {
         "Installed agents"
     }
     fn description(&self) -> Option<&'static str> {
-        Some("Scans PATH for known agent CLIs")
+        Some("Detects which agent CLIs are installed via AgentDetector")
     }
     fn run(&self, _ctx: &dyn AppContext) -> DoctorFuture {
         Box::pin(async {
-            let found: Vec<String> = KNOWN_AGENTS
+            let infos = AgentDetector::detect();
+            let found: Vec<String> = infos
                 .iter()
-                .filter(|(_, bin)| which(bin).is_some())
-                .map(|(key, _)| key.to_string())
+                .filter(|i| i.installed)
+                .map(|i| i.key.clone())
                 .collect();
             if found.is_empty() {
+                let all_keys: Vec<String> = infos.iter().map(|i| i.key.clone()).collect();
                 finding(
                     "installed-agents",
                     "Installed agents",
                     CheckSeverity::Warning,
                     "No known agent CLIs found on PATH".to_string(),
-                    Some(format!(
-                        "Looked for: {}",
-                        KNOWN_AGENTS
-                            .iter()
-                            .map(|(k, _)| *k)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )),
+                    Some(format!("Looked for: {}", all_keys.join(", "))),
                     Some("Install an agent CLI (e.g. claude, codex, gemini).".to_string()),
                 )
             } else {
@@ -252,30 +238,36 @@ impl DoctorCheck for AgentReachabilityCheck {
                 }
             };
             let key = cfg.agent.agent.as_str();
-            let bin = KNOWN_AGENTS
-                .iter()
-                .find(|(k, _)| *k == key)
-                .map(|(_, b)| *b)
-                .unwrap_or(key);
-            match which(bin) {
-                Some(path) => finding(
+
+            let infos = AgentDetector::detect();
+            let info = infos.iter().find(|i| i.key == key);
+            let installed = info.map(|i| i.installed).unwrap_or(false);
+            let reason = info.and_then(|i| i.reason.clone());
+
+            if installed {
+                let path_display = which(key)
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "on PATH".to_string());
+                finding(
                     "agent-reachability",
                     "Configured agent reachability",
                     CheckSeverity::Ok,
-                    format!("Agent '{key}' reachable at {}", path.display()),
+                    format!("Agent '{key}' reachable at {path_display}"),
                     None,
                     None,
-                ),
-                None => finding(
+                )
+            } else {
+                let detail = reason.map(|r| format!("Reason: {r}"));
+                finding(
                     "agent-reachability",
                     "Configured agent reachability",
                     CheckSeverity::Error,
-                    format!("Configured agent '{key}' (binary '{bin}') not found on PATH"),
-                    None,
+                    format!("Configured agent '{key}' not found on PATH"),
+                    detail,
                     Some(format!(
-                        "Install '{bin}', or set a different agent via `dk init -a <agent>`."
+                        "Install '{key}', or set a different agent via `dk init -a <agent>`."
                     )),
-                ),
+                )
             }
         })
     }

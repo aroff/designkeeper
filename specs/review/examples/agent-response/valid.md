@@ -1,7 +1,5 @@
 # Example agent response (pipeline input)
 
-The aikit-sdk `ResponseValidator` extracts JSON from the **first** ` ```json ` fenced block. Text outside the fence is ignored for validation.
-
 Here is the analysis result:
 
 ```json

@@ -5,8 +5,9 @@
 
 use std::path::{Path, PathBuf};
 
+use aikit_sdk::AgentRunner;
 use dk_core::config::default_config;
-use dk_core::pipeline::{extract_json_block, validate_json, AgentRunner, PipelineError};
+use dk_core::pipeline::{extract_json_block, validate_json};
 use dk_core::{pack, review, ReviewInput, ReviewOutput, Verdict};
 use serde_json::Value;
 
@@ -49,7 +50,6 @@ fn pr_context_input_passes_schema() {
 
 #[test]
 fn invalid_input_fails_schema() {
-    // Missing required `working_dir`.
     let instance: Value = serde_json::json!({ "target": "src/" });
     assert!(validate_json(&input_schema(), &instance).is_err());
 }
@@ -59,7 +59,6 @@ fn invalid_input_fails_schema() {
 #[test]
 fn suggested_patch_too_long_fails_output_schema() {
     let mut instance = read_json("examples/output/approve.json");
-    // Inject a suggested_patch that exceeds the 2000-char maxLength constraint.
     let long_patch = "x".repeat(2001);
     instance["findings"][0]["suggested_patch"] = serde_json::Value::String(long_patch);
     assert!(
@@ -74,7 +73,6 @@ fn suggested_patch_too_long_fails_output_schema() {
 fn approve_output_passes_schema() {
     let instance = read_json("examples/output/approve.json");
     validate_json(&output_schema(), &instance).expect("approve.json should validate");
-    // and deserializes into the typed output
     let typed: ReviewOutput = serde_json::from_value(instance).unwrap();
     assert_eq!(typed.summary.verdict, Verdict::Approve);
 }
@@ -97,19 +95,11 @@ fn extracts_and_parses_agent_response() {
     let typed: ReviewOutput = serde_json::from_str(&block).expect("parses to ReviewOutput");
     assert_eq!(typed.summary.verdict, Verdict::ApproveWithComments);
     assert!((typed.overall_score - 7.0).abs() < f64::EPSILON);
-    // The extracted block must validate against the output schema too.
     let value: Value = serde_json::from_str(&block).unwrap();
     validate_json(&output_schema(), &value).expect("extracted block validates");
 }
 
-// ---- Full pipeline smoke test with a recorded agent response -------------
-
-struct RecordedAgent(String);
-impl AgentRunner for RecordedAgent {
-    fn run(&self, _prompt: &str, _wd: &Path) -> Result<String, PipelineError> {
-        Ok(self.0.clone())
-    }
-}
+// ---- Full pipeline smoke test with a mock agent response -----------------
 
 fn pack_and_workdir() -> (tempfile::TempDir, tempfile::TempDir) {
     let pack_dir = tempfile::tempdir().unwrap();
@@ -134,18 +124,17 @@ fn input_for(wd: &Path) -> ReviewInput {
 fn end_to_end_run_review_with_recorded_response() {
     let (pack_dir, wd) = pack_and_workdir();
     let raw = read_fixture("examples/agent-response/valid.md");
-    let agent = RecordedAgent(raw);
-    let output = review::run_review_with_agent(
+    let (runner, _) = AgentRunner::with_mock(vec![Ok(raw)]);
+    let output = review::run_review_with_runner(
         input_for(wd.path()),
         &default_config(),
         pack_dir.path(),
-        &agent,
+        runner,
         &|_| {},
     )
     .expect("review succeeds");
     assert_eq!(output.summary.verdict, Verdict::ApproveWithComments);
 
-    // Report rendering fills all slots (no leftover {{...}} tokens from template).
     let report = review::render_report(&output, pack_dir.path()).unwrap();
     assert!(report.contains("Code review grade report"));
     assert!(report.contains("documentation"));
@@ -156,27 +145,24 @@ fn end_to_end_run_review_with_recorded_response() {
 #[test]
 fn run_review_reconciles_score_mismatch() {
     let (pack_dir, wd) = pack_and_workdir();
-    // Take valid output, then corrupt top-level overall_score so V1 diverges.
     let mut value = read_json("examples/output/approve.json");
     value["overall_score"] = serde_json::json!(2.0);
     let raw = format!("```json\n{value}\n```");
-    let agent = RecordedAgent(raw);
-    let output = review::run_review_with_agent(
+    let (runner, _) = AgentRunner::with_mock(vec![Ok(raw)]);
+    let output = review::run_review_with_runner(
         input_for(wd.path()),
         &default_config(),
         pack_dir.path(),
-        &agent,
+        runner,
         &|_| {},
     )
-    .expect("reconciliation should not fail — score mismatch is now auto-reconciled");
-    // Both scores must be equal after reconciliation.
+    .expect("reconciliation should not fail");
     assert!(
         (output.summary.overall_score - output.overall_score).abs() < 1e-9,
         "scores must match after reconciliation: summary={} top_level={}",
         output.summary.overall_score,
         output.overall_score
     );
-    // Canonical score is the rounded mean of scored grade entries.
     let scored: Vec<f64> = output.grades.values().filter_map(|g| g.score()).collect();
     assert!(!scored.is_empty());
     let expected = (scored.iter().sum::<f64>() / scored.len() as f64 * 10.0).round() / 10.0;
@@ -192,26 +178,23 @@ fn run_review_reconciles_score_mismatch() {
 fn run_review_input_validation_error() {
     let (pack_dir, wd) = pack_and_workdir();
     let mut input = input_for(wd.path());
-    // Empty target violates minLength: 1 in the input schema.
     input.target = Some(String::new());
-    let agent = RecordedAgent("unused".to_string());
-    let err =
-        review::run_review_with_agent(input, &default_config(), pack_dir.path(), &agent, &|_| {})
-            .unwrap_err();
+    let (runner, _) = AgentRunner::with_mock(vec![]);
+    let err = review::run_review_with_runner(input, &default_config(), pack_dir.path(), runner, &|_| {})
+        .unwrap_err();
     assert_eq!(err.code(), "DK_INPUT_VALIDATION");
 }
 
 #[test]
 fn run_review_template_not_found() {
-    // Point at an empty template dir -> missing prompt/schema templates.
     let empty = tempfile::tempdir().unwrap();
     let wd = tempfile::tempdir().unwrap();
-    let agent = RecordedAgent("unused".to_string());
-    let err = review::run_review_with_agent(
+    let (runner, _) = AgentRunner::with_mock(vec![]);
+    let err = review::run_review_with_runner(
         input_for(wd.path()),
         &default_config(),
         empty.path(),
-        &agent,
+        runner,
         &|_| {},
     )
     .unwrap_err();

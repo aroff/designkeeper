@@ -53,6 +53,11 @@ pub fn build_prompt_slots(
     Ok(slots)
 }
 
+/// Convert a slot map to a `Vec<(&str, &str)>` suitable for `aikit_sdk::TemplateRenderer::render`.
+pub fn slots_as_pairs(slots: &HashMap<String, String>) -> Vec<(&str, &str)> {
+    slots.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect()
+}
+
 /// Build the 9 report-template slots from validated output (spec §4.4).
 pub fn build_report_slots(output: &ReviewOutput) -> HashMap<String, String> {
     let mut slots = HashMap::new();
