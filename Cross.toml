@@ -1,0 +1,3 @@
+[target.x86_64-unknown-linux-musl]
+# The vendored openssl build requires perl to be present in the cross image.
+pre-build = ["apt-get install -y --no-install-recommends perl"]
