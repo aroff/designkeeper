@@ -1,7 +1,4 @@
 [target.x86_64-unknown-linux-musl]
-# perl is required by openssl-sys to compile vendored OpenSSL from source.
+# perl is required by openssl-sys to compile vendored OpenSSL from source
+# (openssl crate is declared with features = ["vendored"] in Cargo.toml).
 pre-build = ["apt-get install -y --no-install-recommends perl"]
-
-[target.x86_64-unknown-linux-musl.env]
-# Forward vendored-OpenSSL trigger vars from the runner into the cross container.
-passthrough = ["OPENSSL_STATIC", "OPENSSL_VENDORED"]
