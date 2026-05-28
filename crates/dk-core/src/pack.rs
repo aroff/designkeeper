@@ -15,22 +15,22 @@
 //! ```
 //!
 //! `dk init` (out of scope here) materializes this under `.dk/`. Until then the
-//! defaults are embedded from `specs/review/` and can be written to any
+//! defaults are embedded from `templates/default/` and can be written to any
 //! directory via [`write_default_pack`] so `dk review` works without init.
 
 use std::io;
 use std::path::{Path, PathBuf};
 
 /// Default prompt template (`templates/review.md`).
-pub const PROMPT_TEMPLATE: &str = include_str!("../../../specs/review/templates/prompt.md");
+pub const PROMPT_TEMPLATE: &str = include_str!("../../../templates/default/templates/prompt.md");
 /// Default rubric (`templates/methodology.md`).
-pub const METHODOLOGY: &str = include_str!("../../../specs/review/templates/methodology.md");
+pub const METHODOLOGY: &str = include_str!("../../../templates/default/templates/methodology.md");
 /// Default report layout (`reports/review.md`).
-pub const REPORT_TEMPLATE: &str = include_str!("../../../specs/review/templates/report.md");
+pub const REPORT_TEMPLATE: &str = include_str!("../../../templates/default/templates/report.md");
 /// Input schema (`schemas/review-input.json`).
-pub const INPUT_SCHEMA: &str = include_str!("../../../specs/review/schemas/input.schema.json");
+pub const INPUT_SCHEMA: &str = include_str!("../../../templates/default/schemas/input.schema.json");
 /// Output schema (`schemas/review.json`).
-pub const OUTPUT_SCHEMA: &str = include_str!("../../../specs/review/schemas/output.schema.json");
+pub const OUTPUT_SCHEMA: &str = include_str!("../../../templates/default/schemas/output.schema.json");
 
 pub fn prompt_path(dir: &Path) -> PathBuf {
     dir.join("templates").join("review.md")
