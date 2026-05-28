@@ -1,0 +1,188 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://designkeeper.dev/schemas/review/output.schema.json",
+  "title": "ReviewOutput",
+  "description": "Structured agent output for dk review. Extracted from the first ```json code block in the agent response and validated by aikit-sdk.",
+  "type": "object",
+  "required": [
+    "summary",
+    "grades",
+    "overall_score",
+    "good_things",
+    "findings",
+    "limitations",
+    "suggested_next_steps"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "summary": {
+      "type": "object",
+      "required": ["verdict", "overall_score", "one_paragraph"],
+      "additionalProperties": false,
+      "properties": {
+        "verdict": {
+          "type": "string",
+          "enum": ["approve", "approve_with_comments", "request_changes", "reject"]
+        },
+        "overall_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "one_paragraph": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        }
+      }
+    },
+    "grades": {
+      "type": "object",
+      "description": "Per-dimension scores 0-10 with rationale.",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/$defs/grade_entry"
+      },
+      "propertyNames": {
+        "$ref": "#/$defs/dimension"
+      }
+    },
+    "overall_score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 10,
+      "description": "Rounded mean of evaluated dimension scores (exclude not_evaluated)."
+    },
+    "good_things": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Positive practices worth retaining (Google eng-practices Good Things)."
+    },
+    "findings": {
+      "type": "array",
+      "maxItems": 50,
+      "items": { "$ref": "#/$defs/finding" }
+    },
+    "limitations": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "What could not be verified (no UI test, generated code skipped, etc.)."
+    },
+    "suggested_next_steps": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 1,
+      "description": "Ordered actions for the author, most important first."
+    }
+  },
+  "$defs": {
+    "dimension": {
+      "type": "string",
+      "enum": [
+        "overall_code_health",
+        "cl_description",
+        "change_scope",
+        "design",
+        "functionality",
+        "complexity",
+        "tests",
+        "naming",
+        "comments",
+        "style",
+        "consistency",
+        "documentation",
+        "context_and_review_depth"
+      ]
+    },
+    "grade_entry": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["score", "rationale"],
+          "additionalProperties": false,
+          "properties": {
+            "score": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 10
+            },
+            "rationale": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["not_evaluated", "rationale"],
+          "additionalProperties": false,
+          "properties": {
+            "not_evaluated": { "type": "boolean", "const": true },
+            "rationale": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            }
+          }
+        }
+      ]
+    },
+    "finding": {
+      "type": "object",
+      "required": [
+        "id",
+        "dimension",
+        "severity",
+        "location",
+        "observation",
+        "why_it_matters",
+        "recommended_action"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+          "description": "Stable slug, e.g. design-001."
+        },
+        "dimension": { "$ref": "#/$defs/dimension" },
+        "severity": {
+          "type": "string",
+          "enum": ["blocker", "major", "minor", "nit"]
+        },
+        "location": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "path/to/file.ext:42-48, PR description, or change_scope (whole CL)."
+        },
+        "observation": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 1000
+        },
+        "why_it_matters": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 500
+        },
+        "recommended_action": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 1000
+        },
+        "evidence": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Optional short excerpt or symbol reference."
+        },
+        "suggested_patch": {
+          "type": "string",
+          "maxLength": 2000,
+          "description": "Optional unified diff or code snippet showing the fix."
+        }
+      }
+    }
+  }
+}

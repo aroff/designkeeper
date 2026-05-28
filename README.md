@@ -9,6 +9,16 @@ emits a scored report or a pass/fail exit code.
 CodeScene is the UX inspiration (commands, output style); the domain is design
 and architecture review.
 
+## Methodology
+
+The default review rubric is based on the
+[Google Engineering Practices](https://github.com/google/eng-practices) guide
+(`looking-for.md`, `standard.md`, `cl-descriptions.md`, `small-cls.md`,
+`navigate.md`). It scores 13 review dimensions on a 0–10 scale. The full
+scoring anchors live in
+[`templates/default/templates/methodology.md`](templates/default/templates/methodology.md)
+and can be customized by editing `.dk/templates/methodology.md` after `dk init`.
+
 ## How it works
 
 ```
@@ -141,7 +151,8 @@ pack = "default"                     # "default" or a local folder
 CLI `--agent` / `--model` / `--output-format` flags override `dk.toml`, which
 overrides built-in defaults.
 
-**`.dk/`** — the editable template pack:
+**`.dk/`** — the editable template pack (initialized from
+[`templates/default/`](templates/default/)):
 
 ```
 .dk/

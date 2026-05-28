@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://designkeeper.dev/schemas/review/input.schema.json",
+  "title": "ReviewInput",
+  "description": "Structured input for dk review. Serialized into prompt template slots by dk; validated before pipeline run.",
+  "type": "object",
+  "required": ["working_dir"],
+  "additionalProperties": false,
+  "properties": {
+    "working_dir": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Absolute or relative path to the repository or tree under review. Agent cwd for filesystem access."
+    },
+    "target": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional path or glob root within working_dir to focus the review. When omitted, dk uses file discovery defaults."
+    },
+    "change_context": {
+      "type": "object",
+      "description": "Metadata about the change under review (PR, CL, or local diff).",
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "PR/CL title or short summary line."
+        },
+        "description": {
+          "type": "string",
+          "description": "Full PR/CL body; should explain what and why."
+        },
+        "base_ref": {
+          "type": "string",
+          "description": "Git ref for comparison base, e.g. main or HEAD~1."
+        },
+        "head_ref": {
+          "type": "string",
+          "description": "Git ref for the change, e.g. HEAD or branch name."
+        },
+        "diff_stat": {
+          "type": "string",
+          "description": "Optional precomputed diff stat summary from dk (files changed, insertions/deletions)."
+        }
+      }
+    },
+    "focus": {
+      "type": "array",
+      "description": "Optional review focus areas beyond the default rubric.",
+      "items": {
+        "type": "string",
+        "enum": [
+          "security",
+          "concurrency",
+          "accessibility",
+          "internationalization",
+          "privacy",
+          "performance",
+          "api_design",
+          "ui"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "project_hints": {
+      "type": "object",
+      "description": "Pointers the agent should consult under working_dir.",
+      "additionalProperties": false,
+      "properties": {
+        "style_guide": {
+          "type": "string",
+          "description": "URL or repo-relative path to the style guide."
+        },
+        "contributing": {
+          "type": "string",
+          "description": "Repo-relative path to CONTRIBUTING or review guidelines."
+        },
+        "architecture_docs": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Repo-relative paths to architecture or ADR docs."
+        }
+      }
+    },
+    "options": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_findings": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "default": 25,
+          "description": "Maximum actionable findings to emit."
+        },
+        "include_dimensions": {
+          "type": "array",
+          "description": "When set, grade only these dimensions (others reported as not_evaluated in output).",
+          "items": { "$ref": "#/$defs/dimension" },
+          "uniqueItems": true,
+          "minItems": 1
+        }
+      }
+    }
+  },
+  "$defs": {
+    "dimension": {
+      "type": "string",
+      "enum": [
+        "overall_code_health",
+        "cl_description",
+        "change_scope",
+        "design",
+        "functionality",
+        "complexity",
+        "tests",
+        "naming",
+        "comments",
+        "style",
+        "consistency",
+        "documentation",
+        "context_and_review_depth"
+      ]
+    }
+  }
+}

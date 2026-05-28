@@ -1,7 +1,7 @@
 //! Fixture-driven acceptance tests (spec §7, AC #14-#18 + smoke test).
 //!
 //! Consumes the spec fixtures under `specs/review/examples/` and the schemas
-//! under `specs/review/schemas/`.
+//! under `templates/default/schemas/`.
 
 use std::path::{Path, PathBuf};
 
