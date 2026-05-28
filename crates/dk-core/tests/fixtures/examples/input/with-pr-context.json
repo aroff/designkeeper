@@ -1,0 +1,20 @@
+{
+  "working_dir": "/home/dev/myapp",
+  "target": "src/ordering/",
+  "change_context": {
+    "title": "Add retry policy to OrderProcessor",
+    "description": "Introduce exponential backoff for transient DB errors in OrderProcessor.\n\nMotivation: checkout failures spike when the primary DB blips. Retries are bounded to avoid blocking the worker pool.\n\nTradeoff: idempotency keys are required on all write paths touched by this CL.",
+    "base_ref": "main",
+    "head_ref": "feature/order-retry",
+    "diff_stat": "4 files changed, 186 insertions(+), 12 deletions(-)"
+  },
+  "focus": ["concurrency"],
+  "project_hints": {
+    "style_guide": "CONTRIBUTING.md#style",
+    "contributing": "CONTRIBUTING.md",
+    "architecture_docs": ["docs/adr/0001-ordering-boundaries.md"]
+  },
+  "options": {
+    "max_findings": 25
+  }
+}

@@ -121,9 +121,7 @@ mod tests {
 
     fn fixture(name: &str) -> String {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-            .join("specs/review/examples/output")
+            .join("tests/fixtures/examples/output")
             .join(name);
         std::fs::read_to_string(root).unwrap()
     }

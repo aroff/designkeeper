@@ -1,6 +1,6 @@
 //! Fixture-driven acceptance tests (spec §7, AC #14-#18 + smoke test).
 //!
-//! Consumes the spec fixtures under `specs/review/examples/` and the schemas
+//! Consumes the fixtures under `crates/dk-core/tests/fixtures/` and the schemas
 //! under `templates/default/schemas/`.
 
 use std::path::{Path, PathBuf};
@@ -11,14 +11,12 @@ use dk_core::pipeline::{extract_json_block, validate_json};
 use dk_core::{pack, review, ReviewInput, ReviewOutput, Verdict};
 use serde_json::Value;
 
-fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
+fn fixture_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 
 fn read_fixture(rel: &str) -> String {
-    let path = repo_root().join("specs/review").join(rel);
+    let path = fixture_root().join(rel);
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
 }
 
