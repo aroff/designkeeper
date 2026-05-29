@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use aikit_sdk::AgentRunner;
 
 use crate::config::DkConfig;
-use crate::review::{self, build_agent_runner, ReviewInput, ReviewOutput, Severity};
+use crate::review::{self, build_agent_runner, ProgressFn, ReviewInput, ReviewOutput, Severity};
 
 /// Result of a `dk check` run.
 pub struct CheckResult {
@@ -32,7 +32,7 @@ pub fn run_check(
     config: &DkConfig,
     template_dir: &Path,
     verbose: bool,
-    progress: &crate::pipeline::ProgressFn,
+    progress: &ProgressFn,
 ) -> CheckResult {
     let runner = build_agent_runner(config, &input);
     run_check_with_runner(input, config, template_dir, verbose, runner, progress)
@@ -45,7 +45,7 @@ pub fn run_check_with_runner(
     template_dir: &Path,
     verbose: bool,
     runner: AgentRunner,
-    progress: &crate::pipeline::ProgressFn,
+    progress: &ProgressFn,
 ) -> CheckResult {
     match review::run_review_with_runner(input, config, template_dir, runner, progress) {
         Ok(output) => {
@@ -69,7 +69,11 @@ pub fn run_check_with_runner(
                 passed,
                 report,
                 findings_summary,
-                fail_code: if passed { None } else { Some("DK_CHECK_FAILED") },
+                fail_code: if passed {
+                    None
+                } else {
+                    Some("DK_CHECK_FAILED")
+                },
             }
         }
         Err(err) => CheckResult {
@@ -85,8 +89,9 @@ pub fn run_check_with_runner(
 /// Build a findings summary grouped by severity (blockers first).
 fn findings_summary(output: &ReviewOutput) -> String {
     let mut lines = vec![format!(
-        "Verdict: {:?} (score {:.1}/10)",
-        output.summary.verdict, output.summary.overall_score
+        "Verdict: {} (score {:.1}/10)",
+        output.summary.verdict.as_key(),
+        output.summary.overall_score
     )];
     let order = [
         Severity::Blocker,

@@ -6,7 +6,7 @@ Structured pipeline artifact for **`dk review`**: structured review rubric (defa
 
 Implementation MUST rely on the latest versions of `cli-framework` and `aikit-sdk` for as much of the work as possible:
 
-- **cli-framework**: command registration, argument parsing, flag definitions, MCP server (`dk mcp`), HTTP serve infrastructure (`dk serve`).
+- **cli-framework**: command registration, argument parsing, flag definitions, MCP server (`dk mcp`).
 - **aikit-sdk**: structured pipeline — `TemplateRenderer`, `AgentRunner`, `ResponseValidator`, `ReportRenderer`, `Pipeline` composition, agent detection.
 
 Custom logic in `dk-core` is limited to: file discovery, config resolution (`dk.toml` walk-up), init scaffolding, and domain-specific post-validation checks (Section: Validation rules).
@@ -106,10 +106,6 @@ Implement in `dk-core` as warnings or post-validation checks:
 2. Mean of graded dimensions (where `score` present) ≈ `overall_score` (±0.5); warn if drift.
 3. `reject` verdict must not have `overall_score` > 6 unless documented in `limitations`.
 4. Every `blocker` finding should correlate with `request_changes` or `reject` verdict.
-
-## HTTP (`dk serve`)
-
-Add `POST /review` with JSON body matching `input.schema.json`; response body is validated output or rendered report per `Accept` / `output_format`.
 
 ## MCP
 

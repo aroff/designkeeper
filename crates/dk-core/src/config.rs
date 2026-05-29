@@ -11,7 +11,6 @@ pub const DEFAULT_EXTENSIONS: &[&str] = &[
     ".rb", ".ex", ".exs", ".scala", ".swift", ".cs",
 ];
 
-/// Resolved DesignKeeper configuration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DkConfig {
     pub scan: ScanConfig,
@@ -31,7 +30,8 @@ pub struct OutputConfig {
     pub format: OutputFormat,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum OutputFormat {
     Markdown,
     Json,
@@ -78,6 +78,22 @@ impl ConfigError {
     }
 }
 
+/// Walk up from `start` calling `pred` on each directory. Returns the first
+/// `pred(dir)` that returns `Some(T)`, or `None` if the root is reached.
+pub fn find_up<F, T>(start: &Path, mut pred: F) -> Option<T>
+where
+    F: FnMut(&Path) -> Option<T>,
+{
+    let mut dir = Some(start);
+    while let Some(current) = dir {
+        if let Some(result) = pred(current) {
+            return Some(result);
+        }
+        dir = current.parent();
+    }
+    None
+}
+
 /// Built-in defaults used when no `dk.toml` is found.
 pub fn default_config() -> DkConfig {
     DkConfig {
@@ -103,20 +119,24 @@ pub fn default_config() -> DkConfig {
 /// Walk up from `working_dir` looking for `dk.toml`. Parse it into [`DkConfig`]
 /// (filling absent sections from defaults). Absent file -> defaults, no error.
 pub fn resolve_config(working_dir: &Path) -> Result<DkConfig, ConfigError> {
-    let mut dir = Some(working_dir);
-    while let Some(current) = dir {
-        let candidate = current.join("dk.toml");
+    find_up(working_dir, |dir| {
+        let candidate = dir.join("dk.toml");
         if candidate.is_file() {
-            let text = std::fs::read_to_string(&candidate)?;
-            let raw: RawConfig = toml::from_str(&text).map_err(|e| ConfigError::Parse {
-                path: candidate.display().to_string(),
-                message: e.to_string(),
-            })?;
-            return Ok(raw.into_config());
+            Some(candidate)
+        } else {
+            None
         }
-        dir = current.parent();
-    }
-    Ok(default_config())
+    })
+    .map(|path| {
+        let text = std::fs::read_to_string(&path)?;
+        let raw: RawConfig = toml::from_str(&text).map_err(|e| ConfigError::Parse {
+            path: path.display().to_string(),
+            message: e.to_string(),
+        })?;
+        Ok(raw.into_config())
+    })
+    .transpose()
+    .map(|opt| opt.unwrap_or_else(default_config))
 }
 
 // ---- TOML deserialization shapes (all optional, merged over defaults) ----
@@ -144,7 +164,7 @@ struct RawScan {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawOutput {
-    format: Option<String>,
+    format: Option<OutputFormat>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -175,9 +195,7 @@ impl RawConfig {
         }
         if let Some(output) = self.output {
             if let Some(format) = output.format {
-                if let Some(parsed) = OutputFormat::parse(&format) {
-                    cfg.output.format = parsed;
-                }
+                cfg.output.format = format;
             }
         }
         if let Some(agent) = self.agent {

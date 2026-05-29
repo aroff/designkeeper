@@ -1,178 +1,110 @@
 # DesignKeeper (`dk`)
 
-An architecture and design **compliance CLI** — a structured, agent-driven code
-reviewer. `dk` turns an AI coding agent (Claude, Codex, Gemini, …) into a
-repeatable review gate: it renders a methodology-based prompt, runs your agent
-against a target, validates the agent's response against a JSON schema, and
-emits a scored report or a pass/fail exit code.
+Agent-driven code review with a scored rubric and a pass/fail exit code.
 
-CodeScene is the UX inspiration (commands, output style); the domain is design
-and architecture review.
-
-## Methodology
-
-The default review rubric is based on the
-[Google Engineering Practices](https://github.com/google/eng-practices) guide
-(`looking-for.md`, `standard.md`, `cl-descriptions.md`, `small-cls.md`,
-`navigate.md`). It scores 13 review dimensions on a 0–10 scale. The full
-scoring anchors live in
-[`templates/default/templates/methodology.md`](templates/default/templates/methodology.md)
-and can be customized by editing `.dk/templates/methodology.md` after `dk init`.
-
-## How it works
-
-```
-prompt (methodology + target + schema)  →  agent  →  structured JSON  →  validate/retry  →  report
-```
-
-`dk` builds a **task directive**, not a full context payload: the prompt
-contains the review methodology, the target path(s), and the expected output
-schema. The agent reads the source files from the filesystem itself. The
-response is validated against the template pack's output schema and retried (up
-to 2×) with the validation errors fed back in, then rendered as markdown or JSON.
+`dk` builds a structured prompt from your methodology, runs it through an AI agent (Claude, Codex, Gemini, …), validates the JSON response against a schema, and emits a scored report or CI exit code. The rubric is based on [Google Engineering Practices](https://github.com/google/eng-practices) and scores 13 dimensions on a 0–10 scale.
 
 ## Install
 
-**Prerequisites**
-
-- A Rust toolchain (stable).
-- An agent CLI on your `PATH` — `claude` by default. Run `dk doctor` to check
-  what's installed and reachable.
-
-**Build & install the binary**
-
+**macOS**
 ```sh
-git clone https://github.com/aroff/designkeeper
-cd designkeeper
-cargo install --path crates/dk      # installs `dk` into ~/.cargo/bin
+brew install aroff/cli/dk
 ```
 
-Or build without installing:
-
+**Windows**
 ```sh
-cargo build --release               # binary at target/release/dk
+scoop bucket add aroff https://github.com/aroff/scoop-bucket
+scoop install dk
 ```
+
+**Cargo**
+```sh
+cargo install --git https://github.com/aroff/designkeeper --bin dk
+```
+
+Requires an agent CLI on your `PATH` (`claude` by default). Run `dk doctor` to verify.
 
 ## Quick start
 
 ```sh
 cd your-project
+dk init                    # scaffold .dk/ and dk.toml
+dk review src/             # scored markdown report to stdout
+dk check src/              # exit 0 = approve, 1 = request_changes/reject
+```
 
-# 1. Scaffold .dk/ (template pack) and dk.toml. Interactive when flags are
-#    omitted; or pass them directly:
-dk init --agent claude
+**CI gate**
+```yaml
+- run: dk check
+```
 
-# 2. Review the whole repo (or a subpath) and print a scored markdown report:
-dk review
-dk review src/
+**PR review**
+```sh
+dk review --title "Add auth" --base-ref main --head-ref feature/auth
+```
 
-# 3. Use it as a pass/fail gate (exit 0 = approve, 1 = changes/reject):
-dk check && echo "design OK"
+**Focus on a specific area**
+```sh
+dk review --focus security --focus concurrency
 ```
 
 ## Commands
 
-| Command | What it does |
-| --- | --- |
-| `dk init` | Scaffold `.dk/` and write `dk.toml`. Interactive when flags are omitted; re-running updates values in place. |
-| `dk review [<path>]` | Run a structured review and emit a scored report (markdown or JSON). |
-| `dk check [<path>]` | Run a review and map the verdict to an exit code — a CI/pre-commit gate. |
-| `dk doctor` | Diagnose the environment: config file, template pack, installed agents, agent reachability. |
-| `dk mcp serve` | Expose `dk` as an MCP server (HTTP or stdio) so agents can call `review` as a tool. |
-| `dk spec` | Export the CLI command surface as JSON, YAML, or Markdown. |
-| `dk completion` | Emit a shell completion stub. |
+| Command | Description |
+|---|---|
+| `dk init` | Scaffold `.dk/` template pack and `dk.toml`. Re-running updates in place. |
+| `dk review [<path>]` | Run a review; emit scored markdown or JSON report. |
+| `dk check [<path>]` | Same pipeline, exit 0/1. Prints nothing by default; `-v` for the full report. |
+| `dk doctor` | Check config, template pack, agent availability. |
+| `dk mcp serve` | Expose `dk` as an MCP tool (HTTP or stdio). |
 
-### `dk review`
+### Verdicts and exit codes
+
+| Verdict | `dk check` |
+|---|---|
+| `approve`, `approve_with_comments` | exit 0 |
+| `request_changes`, `reject` | exit 1 |
+| operational error (config, I/O, agent) | exit 2 |
+
+### `dk review` flags
 
 ```
-dk review [<path>]
-          [-a --agent <a>] [-m --model <m>]
-          [--output-format markdown|json] [--output-file <path>]
-          [--title <text>] [--description <file|text>]
-          [--base-ref <ref>] [--head-ref <ref>]
-          [--focus <area>]...        # security, concurrency, accessibility,
-                                     # internationalization, privacy,
-                                     # performance, api_design, ui
-          [--max-findings <1-50>]    # default 25
+--agent/-a <key>           agent to use (default: claude)
+--model/-m <model>         model override
+--output-format <fmt>      markdown (default) or json
+--output-file <path>       write report to file
+--title <text>             changelist title (for PR context)
+--description <file|text>  changelist description
+--base-ref / --head-ref    git refs for diff context
+--from-git <base-ref>      derive PR context from git (title, diff, changed files)
+--focus <area>             security, concurrency, accessibility,
+                           internationalization, privacy,
+                           performance, api_design, ui
+--max-findings <1-50>      cap findings (default: 25)
 ```
-
-Produces per-dimension scores, an overall verdict
-(`approve` / `approve_with_comments` / `request_changes` / `reject`),
-findings, and suggested next steps. Defaults to markdown on stdout; use
-`--output-format json` and/or `--output-file` to change that.
-
-### `dk check`
-
-Same review pipeline, collapsed to an exit code:
-
-- `approve` / `approve_with_comments` → **exit 0**
-- `request_changes` / `reject`, or a pipeline error → **exit 1**
-
-By default it prints nothing on stdout (a findings summary goes to stderr on
-failure). Pass `-v/--verbose` to also print the full report.
-
-## Main use cases
-
-- **Local design review** — `dk review src/` for a scored report while you work.
-- **CI / pre-commit gate** — `dk check` returns a non-zero exit code when the
-  verdict is `request_changes` or `reject`, so it drops straight into a pipeline:
-  `dk check || exit 1`.
-- **PR / changelist review** — feed change context with
-  `--title`, `--description`, `--base-ref`, `--head-ref` to focus the review on
-  a diff.
-- **As an MCP tool** — `dk mcp serve` lets an MCP-capable agent invoke `dk.review`
-  directly (HTTP `--transport http` or `--transport stdio`).
-- **Custom methodology** — edit `.dk/templates/methodology.md` (or point
-  `--template-pack` at your own folder) to enforce your team's rubric.
 
 ## Configuration
 
-`dk init` creates two things in your project; both are optional (built-in
-defaults are used when absent), and `dk` walks up parent directories to find them.
-
-**`dk.toml`** — the control file:
+`dk.toml` (walks up parent directories; all fields optional):
 
 ```toml
 [scan]
-extensions = [".rs", ".ts"]          # which file types auto-discovery considers
+extensions      = [".rs", ".ts"]
 ignore_patterns = ["vendor/", "generated/"]
 
 [output]
-format = "markdown"                  # or "json"
+format = "markdown"          # or "json"
 
 [agent]
-agent = "claude"                     # default agent key
-model = ""                           # optional model override
+agent = "claude"
+model = ""                   # optional override
 
 [templates]
-pack = "default"                     # "default" or a local folder
+pack = "default"             # "default" or path to a custom pack
 ```
 
-CLI `--agent` / `--model` / `--output-format` flags override `dk.toml`, which
-overrides built-in defaults.
-
-**`.dk/`** — the editable template pack (initialized from
-[`templates/default/`](templates/default/)):
-
-```
-.dk/
-├── templates/
-│   ├── review.md        # prompt template with {{slots}}
-│   └── methodology.md   # the review rubric — edit to customize
-├── schemas/
-│   ├── review-input.json
-│   └── review.json      # output schema the agent must satisfy
-└── reports/
-    └── review.md        # report layout
-```
-
-### Which files get reviewed?
-
-- `dk review <path>` reviews exactly that path/glob (passed to the agent as-is).
-- `dk review` with no path auto-discovers source files under the working dir:
-  matching `[scan].extensions`, honoring `.gitignore`, skipping hidden files,
-  and excluding `[scan].ignore_patterns`.
+`.dk/` is the editable template pack written by `dk init`. Edit `.dk/templates/methodology.md` to customize the rubric for your team. The built-in defaults are in [`templates/default/`](templates/default/).
 
 ## License
 
-Apache-2.0
+Apache-2.0. The default rubric derives from [google/eng-practices](https://github.com/google/eng-practices) (CC BY 3.0) — see [LICENSE](LICENSE).

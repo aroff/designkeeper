@@ -1,13 +1,10 @@
 //! Domain-specific post-validation (spec §4.5), run after JSON Schema passes.
 //!
-//! V1 (`summary.overall_score` ≈ top-level `overall_score`) is enforced as a
-//! hard error in [`crate::review::run_review`]. V2-V4 are non-blocking warnings
-//! returned here and surfaced via `tracing::warn!`.
+//! Score reconciliation is enforced as a hard overwrite in
+//! [`crate::review::run_review`]. V3-V4 are non-blocking warnings returned here
+//! and surfaced via `tracing::warn!`.
 
 use crate::review::{ReviewOutput, Severity, Verdict};
-
-/// Allowed drift between the mean of scored dimensions and `overall_score` (V2).
-pub const MEAN_DRIFT_TOLERANCE: f64 = 0.5;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidationWarning {
@@ -24,20 +21,20 @@ impl ValidationWarning {
     }
 }
 
-/// Apply non-blocking checks V2-V4 and return any warnings.
+/// Apply non-blocking checks V3-V4 and return any warnings.
 pub fn validate_output(output: &ReviewOutput) -> Vec<ValidationWarning> {
     let mut warnings = Vec::new();
 
-    // V2: mean of scored dimensions ≈ overall_score (±0.5).
     let scores: Vec<f64> = output.grades.values().filter_map(|g| g.score()).collect();
     if !scores.is_empty() {
         let mean = scores.iter().sum::<f64>() / scores.len() as f64;
-        if (mean - output.overall_score).abs() > MEAN_DRIFT_TOLERANCE {
+        if (mean - output.overall_score).abs() > crate::review::MEAN_DRIFT_TOLERANCE {
             warnings.push(ValidationWarning::new(
                 "V2",
                 format!(
-                    "mean of scored dimensions ({mean:.2}) drifts from overall_score ({:.2}) by more than {MEAN_DRIFT_TOLERANCE}",
-                    output.overall_score
+                    "mean of scored dimensions ({mean:.2}) drifts from overall_score ({:.2}) by more than {}",
+                    output.overall_score,
+                    crate::review::MEAN_DRIFT_TOLERANCE
                 ),
             ));
         }
@@ -71,11 +68,7 @@ pub fn validate_output(output: &ReviewOutput) -> Vec<ValidationWarning> {
                 "{} blocker finding(s) [{}] but verdict is {} (expected request_changes or reject)",
                 blocker_ids.len(),
                 blocker_ids.join(", "),
-                match output.summary.verdict {
-                    Verdict::Approve => "approve",
-                    Verdict::ApproveWithComments => "approve_with_comments",
-                    _ => unreachable!(),
-                }
+                output.summary.verdict.as_key()
             ),
         ));
     }

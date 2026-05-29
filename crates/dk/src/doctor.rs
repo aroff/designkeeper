@@ -4,13 +4,13 @@
 //! configuration file, template-pack status, which agent CLIs are installed,
 //! and whether the configured agent is reachable on `PATH`.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use aikit_sdk::agent_runner::AgentDetector;
 use cli_framework::doctor::{CheckSeverity, DoctorCheck, DoctorFinding, DoctorFuture};
 use cli_framework::prelude::AppContext;
 
-use dk_core::config::resolve_config;
+use dk_core::config::{find_up, resolve_config};
 use dk_core::pack;
 
 /// All `dk` doctor checks, ready to hand to `DoctorModule::new`.
@@ -45,31 +45,6 @@ fn cwd() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
-/// Locate a binary on `PATH`, returning the first matching absolute path.
-fn which(bin: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path) {
-        let candidate = dir.join(bin);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    None
-}
-
-/// Walk up from `start` looking for a named file/dir; return the first hit.
-fn find_up(start: &Path, name: &str) -> Option<PathBuf> {
-    let mut dir = Some(start);
-    while let Some(current) = dir {
-        let candidate = current.join(name);
-        if candidate.exists() {
-            return Some(candidate);
-        }
-        dir = current.parent();
-    }
-    None
-}
-
 // ---------------------------------------------------------------------------
 
 struct ConfigCheck;
@@ -93,7 +68,10 @@ impl DoctorCheck for ConfigCheck {
                         "agent = {}\nmodel = {}\noutput = {:?}\npack = {}",
                         cfg.agent.agent, model, cfg.output.format, cfg.templates.pack
                     );
-                    match find_up(&dir, "dk.toml") {
+                    match find_up(&dir, |d| {
+                        let p = d.join("dk.toml");
+                        if p.is_file() { Some(p) } else { None }
+                    }) {
                         Some(path) => finding(
                             "config",
                             "Effective configuration",
@@ -141,7 +119,10 @@ impl DoctorCheck for TemplatePackCheck {
     fn run(&self, _ctx: &dyn AppContext) -> DoctorFuture {
         Box::pin(async {
             let dir = cwd();
-            match find_up(&dir, ".dk") {
+            match find_up(&dir, |d| {
+                let dk = d.join(".dk");
+                if dk.exists() { Some(dk) } else { None }
+            }) {
                 Some(dk) if pack::prompt_path(&dk).is_file() => finding(
                     "template-pack",
                     "Template pack",
@@ -245,14 +226,11 @@ impl DoctorCheck for AgentReachabilityCheck {
             let reason = info.and_then(|i| i.reason.clone());
 
             if installed {
-                let path_display = which(key)
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|| "on PATH".to_string());
                 finding(
                     "agent-reachability",
                     "Configured agent reachability",
                     CheckSeverity::Ok,
-                    format!("Agent '{key}' reachable at {path_display}"),
+                    format!("Agent '{key}' is installed and reachable"),
                     None,
                     None,
                 )

@@ -18,8 +18,8 @@ use cli_framework::mcp::McpToolExportPolicy;
 use cli_framework::prelude::*;
 use cli_framework::spec::arg_spec::{ArgKind, ArgValueType, Cardinality};
 
-use dk_core::config::{default_config, resolve_config, DkConfig, OutputFormat};
-use dk_core::pipeline::Progress;
+use dk_core::config::{default_config, find_up, resolve_config, DkConfig, OutputFormat};
+use dk_core::review::Progress;
 use dk_core::{pack, review, run_check, ReviewInput, ReviewOptions};
 use dk_core::{run_init, InitParams};
 use dk_core::{ChangeContext, Dimension, FocusArea};
@@ -336,7 +336,11 @@ fn run_check_cmd(args: CommandArgs) -> anyhow::Result<()> {
     if let Some(summary) = &result.findings_summary {
         eprintln!("{summary}");
     }
-    exit(if result.passed { 0 } else { 1 });
+    match result.fail_code {
+        None => exit(0),
+        Some("DK_CHECK_FAILED") => exit(1),
+        Some(_) => exit(2),
+    }
 }
 
 fn run_init_cmd(args: CommandArgs) -> anyhow::Result<()> {
@@ -455,49 +459,31 @@ fn output_format(args: &CommandArgs, config: &DkConfig) -> OutputFormat {
 }
 
 fn map_input(args: &CommandArgs, cwd: &Path, config: &DkConfig) -> Result<ReviewInput, String> {
-    // --from-git: derive PR context from git (explicit flags override derived values)
     let from_git = args.named.get("from-git").cloned();
 
-    let mut git_title: Option<String> = None;
-    let mut git_description: Option<String> = None;
-    let mut git_base_ref: Option<String> = None;
-    let mut git_head_ref: Option<String> = None;
-    let mut git_diff_stat: Option<String> = None;
+    let mut git_ctx: Option<ChangeContext> = None;
     let mut git_target: Option<String> = None;
 
     if let Some(ref base) = from_git {
-        git_base_ref = Some(base.clone());
-        git_head_ref = Some("HEAD".to_string());
-        git_title = dk_core::git::log_format(cwd, "%s", "HEAD");
-        git_description = dk_core::git::log_format(cwd, "%b", "HEAD");
-        git_diff_stat = dk_core::git::diff_stat(cwd, base, "HEAD");
-        if let Some(files) = dk_core::git::changed_files(cwd, base, "HEAD") {
-            let exts = &config.scan.extensions;
-            let filtered: Vec<String> = files
-                .into_iter()
-                .filter(|f| exts.iter().any(|ext| f.ends_with(ext.as_str())))
-                .collect();
-            if !filtered.is_empty() {
-                git_target = Some(filtered.join("\n"));
-            }
-        }
+        let (ctx, target) = ChangeContext::from_git(cwd, base, &config.scan.extensions);
+        git_ctx = Some(ctx);
+        git_target = target;
     }
 
-    // Explicit flags override git-derived values
-    let title = args.named.get("title").cloned().or(git_title);
+    let title = args.named.get("title").cloned().or_else(|| git_ctx.as_mut()?.title.take());
     let description = args
         .named
         .get("description")
         .map(|d| read_file_or_text(d))
-        .or(git_description);
-    let base_ref = args.named.get("base-ref").cloned().or(git_base_ref);
-    let head_ref = args.named.get("head-ref").cloned().or(git_head_ref);
+        .or_else(|| git_ctx.as_mut()?.description.take());
+    let base_ref = args.named.get("base-ref").cloned().or_else(|| git_ctx.as_mut()?.base_ref.take());
+    let head_ref = args.named.get("head-ref").cloned().or_else(|| git_ctx.as_mut()?.head_ref.take());
 
-    // Auto-populate diff_stat when both refs are present (G4)
     let diff_stat = if let (Some(base), Some(head)) = (&base_ref, &head_ref) {
-        git_diff_stat.or_else(|| dk_core::git::diff_stat(cwd, base, head))
+        let git_ds = git_ctx.as_mut().and_then(|c| c.diff_stat.take());
+        git_ds.or_else(|| dk_core::git::diff_stat(cwd, base, head))
     } else {
-        git_diff_stat
+        git_ctx.as_mut().and_then(|c| c.diff_stat.take())
     };
 
     let change_context =
@@ -513,7 +499,6 @@ fn map_input(args: &CommandArgs, cwd: &Path, config: &DkConfig) -> Result<Review
             None
         };
 
-    // Explicit path arg overrides git-derived target
     let target = args.named.get("path").cloned().or(git_target);
 
     let focus = match args.named.get("focus") {
@@ -588,13 +573,15 @@ fn flag(args: &CommandArgs, name: &str) -> bool {
 /// Use `.dk/` if present (walking up from cwd); otherwise materialize the
 /// embedded default template pack to a temp dir (spec decision #6).
 fn ensure_template_dir(cwd: &Path) -> Result<PathBuf, std::io::Error> {
-    let mut dir = Some(cwd);
-    while let Some(current) = dir {
-        let dk = current.join(".dk");
+    if let Some(dk) = find_up(cwd, |dir| {
+        let dk = dir.join(".dk");
         if pack::prompt_path(&dk).is_file() {
-            return Ok(dk);
+            Some(dk)
+        } else {
+            None
         }
-        dir = current.parent();
+    }) {
+        return Ok(dk);
     }
     let base = std::env::temp_dir().join(format!("dk-pack-{}", std::process::id()));
     pack::write_default_pack(&base)?;
@@ -656,17 +643,6 @@ impl ProgressReporter {
             Progress::Validating { .. } => {
                 self.swap_ticker(None);
                 eprintln!("dk: validating response…");
-            }
-            Progress::Retrying {
-                attempt,
-                total,
-                errors,
-            } => {
-                self.swap_ticker(None);
-                let plural = if errors == 1 { "" } else { "s" };
-                eprintln!(
-                    "dk: validation failed ({errors} issue{plural}); retrying (attempt {attempt}/{total})…"
-                );
             }
         }
     }
@@ -743,6 +719,7 @@ mod tests {
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
+            named_typed: std::collections::HashMap::new(),
         }
     }
 

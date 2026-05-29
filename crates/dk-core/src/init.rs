@@ -8,7 +8,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
-use toml::Value;
+use toml_edit::DocumentMut;
 
 use crate::pack;
 
@@ -64,11 +64,26 @@ impl InitError {
 /// `[scan]`/`[output]` the user added.
 pub fn run_init(working_dir: &Path, params: &InitParams) -> Result<InitOutcome, InitError> {
     let dk_dir = working_dir.join(".dk");
-    let pack_source = materialize_pack(&dk_dir, &params.pack)?;
+    let staging = working_dir.join(".dk.tmp");
+
+    if staging.exists() {
+        std::fs::remove_dir_all(&staging)?;
+    }
+
+    let pack_source = materialize_pack(&staging, &params.pack)?;
 
     let config_path = working_dir.join("dk.toml");
     let updated_existing = config_path.is_file();
     write_config(&config_path, params)?;
+
+    if dk_dir.exists() {
+        let backup = working_dir.join(".dk.old");
+        if backup.exists() {
+            std::fs::remove_dir_all(&backup)?;
+        }
+        std::fs::rename(&dk_dir, &backup)?;
+    }
+    std::fs::rename(&staging, &dk_dir)?;
 
     Ok(InitOutcome {
         dk_dir,
@@ -110,41 +125,32 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> io::Result<()> {
 }
 
 fn write_config(path: &Path, params: &InitParams) -> Result<(), InitError> {
-    let mut table: toml::Table = if path.is_file() {
+    let mut doc = if path.is_file() {
         let text = std::fs::read_to_string(path)?;
-        toml::from_str(&text).map_err(|e| InitError::ConfigParse {
-            path: path.display().to_string(),
-            message: e.to_string(),
-        })?
+        text.parse::<DocumentMut>()
+            .map_err(|e| InitError::ConfigParse {
+                path: path.display().to_string(),
+                message: e.to_string(),
+            })?
     } else {
-        toml::Table::new()
+        DocumentMut::new()
     };
 
-    set_str(&mut table, "agent", "agent", &params.agent);
+    set_str(&mut doc, "agent", "agent", &params.agent);
     set_str(
-        &mut table,
+        &mut doc,
         "agent",
         "model",
         params.model.as_deref().unwrap_or(""),
     );
-    set_str(&mut table, "templates", "pack", &params.pack);
+    set_str(&mut doc, "templates", "pack", &params.pack);
 
-    let serialized = toml::to_string_pretty(&table).map_err(|e| InitError::ConfigParse {
-        path: path.display().to_string(),
-        message: e.to_string(),
-    })?;
-    std::fs::write(path, serialized)?;
+    std::fs::write(path, doc.to_string())?;
     Ok(())
 }
 
-/// Set `table[section][key] = value`, creating the section table if absent.
-fn set_str(table: &mut toml::Table, section: &str, key: &str, value: &str) {
-    let section_tbl = table
-        .entry(section.to_string())
-        .or_insert_with(|| Value::Table(toml::Table::new()));
-    if let Value::Table(t) = section_tbl {
-        t.insert(key.to_string(), Value::String(value.to_string()));
-    }
+fn set_str(doc: &mut DocumentMut, section: &str, key: &str, value: &str) {
+    doc[section][key] = toml_edit::value(value);
 }
 
 #[cfg(test)]
