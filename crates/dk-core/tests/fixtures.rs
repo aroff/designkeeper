@@ -7,9 +7,43 @@ use std::path::{Path, PathBuf};
 
 use aikit_sdk::AgentRunner;
 use dk_core::config::default_config;
-use dk_core::pipeline::{extract_json_block, validate_json};
 use dk_core::{pack, review, ReviewInput, ReviewOutput, Verdict};
 use serde_json::Value;
+
+fn validate_json(schema: &Value, instance: &Value) -> Result<(), Vec<String>> {
+    let validator =
+        jsonschema::validator_for(schema).map_err(|e| vec![format!("invalid schema: {e}")])?;
+    let errors: Vec<String> = validator
+        .iter_errors(instance)
+        .map(|e| e.to_string())
+        .collect();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+fn extract_json_block(raw: &str) -> Option<String> {
+    let mut lines = raw.lines();
+    let mut collecting = false;
+    let mut buf: Vec<&str> = Vec::new();
+    for line in lines.by_ref() {
+        let trimmed = line.trim();
+        if !collecting {
+            if let Some(rest) = trimmed.strip_prefix("```") {
+                if rest.trim().eq_ignore_ascii_case("json") {
+                    collecting = true;
+                }
+            }
+        } else if trimmed.starts_with("```") {
+            return Some(buf.join("\n"));
+        } else {
+            buf.push(line);
+        }
+    }
+    None
+}
 
 fn fixture_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -170,17 +204,6 @@ fn run_review_reconciles_score_mismatch() {
         output.summary.overall_score,
         expected
     );
-}
-
-#[test]
-fn run_review_input_validation_error() {
-    let (pack_dir, wd) = pack_and_workdir();
-    let mut input = input_for(wd.path());
-    input.target = Some(String::new());
-    let (runner, _) = AgentRunner::with_mock(vec![]);
-    let err = review::run_review_with_runner(input, &default_config(), pack_dir.path(), runner, &|_| {})
-        .unwrap_err();
-    assert_eq!(err.code(), "DK_INPUT_VALIDATION");
 }
 
 #[test]

@@ -1,4 +1,4 @@
-//! Slot-value construction for the prompt (8 slots) and report (9 slots).
+//! Slot-value construction for the prompt (9 slots) and report (9 slots).
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -55,7 +55,10 @@ pub fn build_prompt_slots(
 
 /// Convert a slot map to a `Vec<(&str, &str)>` suitable for `aikit_sdk::TemplateRenderer::render`.
 pub fn slots_as_pairs(slots: &HashMap<String, String>) -> Vec<(&str, &str)> {
-    slots.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect()
+    slots
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect()
 }
 
 /// Build the 9 report-template slots from validated output (spec §4.4).
@@ -63,7 +66,7 @@ pub fn build_report_slots(output: &ReviewOutput) -> HashMap<String, String> {
     let mut slots = HashMap::new();
     slots.insert(
         "verdict".to_string(),
-        format!("{:?}", output.summary.verdict),
+        output.summary.verdict.as_key().to_string(),
     );
     slots.insert(
         "overall_score".to_string(),
@@ -184,7 +187,10 @@ fn minify_schema(path: &Path) -> Result<String, std::io::Error> {
     let text = read_or_default(path, pack::OUTPUT_SCHEMA)?;
     match serde_json::from_str::<serde_json::Value>(&text) {
         Ok(v) => Ok(v.to_string()),
-        Err(_) => Ok(text),
+        Err(e) => {
+            tracing::warn!("failed to minify schema at {}: {e}", path.display());
+            Ok(text)
+        }
     }
 }
 

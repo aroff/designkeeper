@@ -4,7 +4,6 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use thiserror::Error;
 
 use aikit_sdk::runner::RunError;
@@ -12,11 +11,24 @@ use aikit_sdk::{AgentRunner, Pipeline, PipelineError, TemplateRenderer};
 
 use crate::config::DkConfig;
 use crate::pack;
-use crate::pipeline::{validate_json, Progress, ProgressFn};
 use crate::{slots, validation};
 
-/// Tolerance for the V1 summary/top-level score equality check.
-pub const SCORE_TOLERANCE: f64 = 0.01;
+/// Tolerance for the mean-of-grades drift check (V2).
+pub const MEAN_DRIFT_TOLERANCE: f64 = 0.5;
+
+// ---------------------------------------------------------------------------
+// Progress events
+// ---------------------------------------------------------------------------
+
+/// Progress events emitted during review orchestration.
+#[derive(Debug, Clone, Copy)]
+pub enum Progress {
+    AgentRunning { attempt: u32, total: u32 },
+    Validating { attempt: u32, total: u32 },
+}
+
+/// Callback that receives [`Progress`] events. Use `&|_| {}` for none.
+pub type ProgressFn<'a> = dyn Fn(Progress) + 'a;
 
 // ---------------------------------------------------------------------------
 // Input types (mirror schemas/input.schema.json)
@@ -60,6 +72,31 @@ impl ChangeContext {
             && self.base_ref.is_none()
             && self.head_ref.is_none()
             && self.diff_stat.is_none()
+    }
+
+    pub fn from_git(cwd: &Path, base: &str, extensions: &[String]) -> (Self, Option<String>) {
+        let head = "HEAD";
+        let title = crate::git::log_format(cwd, "%s", head);
+        let description = crate::git::log_format(cwd, "%b", head);
+        let diff_stat = crate::git::diff_stat(cwd, base, head);
+        let mut target = None;
+        if let Some(files) = crate::git::changed_files(cwd, base, head) {
+            let filtered: Vec<String> = files
+                .into_iter()
+                .filter(|f| extensions.iter().any(|ext| f.ends_with(ext.as_str())))
+                .collect();
+            if !filtered.is_empty() {
+                target = Some(filtered.join("\n"));
+            }
+        }
+        let ctx = ChangeContext {
+            title,
+            description,
+            base_ref: Some(base.to_string()),
+            head_ref: Some(head.to_string()),
+            diff_stat,
+        };
+        (ctx, target)
     }
 }
 
@@ -234,7 +271,15 @@ pub enum Verdict {
 }
 
 impl Verdict {
-    /// True when the verdict should map to a passing `dk check` (exit 0).
+    pub fn as_key(&self) -> &'static str {
+        match self {
+            Verdict::Approve => "approve",
+            Verdict::ApproveWithComments => "approve_with_comments",
+            Verdict::RequestChanges => "request_changes",
+            Verdict::Reject => "reject",
+        }
+    }
+
     pub fn is_pass(&self) -> bool {
         matches!(self, Verdict::Approve | Verdict::ApproveWithComments)
     }
@@ -315,13 +360,10 @@ pub struct Finding {
 
 #[derive(Debug, Error)]
 pub enum ReviewError {
-    #[error("input failed schema validation: {}", errors.join("; "))]
-    InputValidation { errors: Vec<String> },
     #[error("working_dir does not exist or is not a directory: {}", path.display())]
     WorkingDirInvalid { path: PathBuf },
     #[error(transparent)]
     Config(#[from] crate::config::ConfigError),
-    /// Agent session quota / rate-limit exceeded (`DK_AGENT_QUOTA`).
     #[error("agent quota exceeded{}", .raw_message.as_deref().map(|m| format!(": {m}")).unwrap_or_default())]
     AgentQuotaExceeded { raw_message: Option<String> },
     #[error("agent timed out")]
@@ -330,8 +372,6 @@ pub enum ReviewError {
     AgentNotFound { agent: String },
     #[error("template file not found: {path}")]
     TemplateMissing { path: String },
-    #[error("invalid output schema: {message}")]
-    InvalidSchema { message: String },
     #[error("pipeline error: {message}")]
     PipelineFailure { message: String },
     #[error("template slot missing: {slot}")]
@@ -343,16 +383,13 @@ pub enum ReviewError {
 impl ReviewError {
     pub fn code(&self) -> &'static str {
         match self {
-            ReviewError::InputValidation { .. } => "DK_INPUT_VALIDATION",
             ReviewError::WorkingDirInvalid { .. } => "DK_WORKING_DIR_INVALID",
             ReviewError::Config(c) => c.code(),
             ReviewError::AgentQuotaExceeded { .. } => "DK_AGENT_QUOTA",
             ReviewError::AgentTimeout => "DK_AGENT_TIMEOUT",
             ReviewError::AgentNotFound { .. } => "DK_AGENT_NOT_FOUND",
             ReviewError::TemplateMissing { .. } => "DK_TEMPLATE_NOT_FOUND",
-            ReviewError::InvalidSchema { .. } | ReviewError::PipelineFailure { .. } => {
-                "DK_PIPELINE_ERROR"
-            }
+            ReviewError::PipelineFailure { .. } => "DK_PIPELINE_ERROR",
             ReviewError::TemplateSlotsError { .. } => "DK_TEMPLATE_SLOT",
             ReviewError::Io(_) => "DK_IO_ERROR",
         }
@@ -389,37 +426,30 @@ pub fn run_review_with_runner(
         });
     }
 
-    // 1. Validate CLI-built input against the input schema.
-    let input_value = serde_json::to_value(&input).map_err(|e| ReviewError::InputValidation {
-        errors: vec![e.to_string()],
-    })?;
-    let input_schema = read_schema(&pack::input_schema_path(template_dir))?;
-    validate_against(&input_schema, &input_value)
-        .map_err(|errors| ReviewError::InputValidation { errors })?;
-
-    // 2. Build the prompt slots.
     let prompt_slots = slots::build_prompt_slots(&input, config, template_dir)?;
 
-    // 3. Load prompt template + output schema string.
     let prompt_template = read_template(&pack::prompt_path(template_dir))?;
     let schema_str = read_template(&pack::output_schema_path(template_dir))?;
 
-    // 4. Run the aikit-sdk structured pipeline (render → agent → validate, retry).
     let slots_vec = slots::slots_as_pairs(&prompt_slots);
-    progress(Progress::AgentRunning { attempt: 1, total: 1 });
+    progress(Progress::AgentRunning {
+        attempt: 1,
+        total: 1,
+    });
     let result = Pipeline::new(&prompt_template, &schema_str)
         .max_retries(config.agent.max_retries.unwrap_or(2))
         .run(&slots_vec, runner)
         .map_err(map_pipeline_error)?;
-    progress(Progress::Validating { attempt: 1, total: 1 });
+    progress(Progress::Validating {
+        attempt: 1,
+        total: 1,
+    });
 
-    // 5. Deserialize into the typed output.
     let mut output: ReviewOutput =
         serde_json::from_value(result.data).map_err(|e| ReviewError::PipelineFailure {
             message: format!("output deserialize: {e}"),
         })?;
 
-    // 6. Post-validation: V1 auto-reconcile; V2-V4 are warnings.
     reconcile_scores(&mut output);
     for warning in validation::validate_output(&output) {
         tracing::warn!(rule = %warning.rule, "{}", warning.message);
@@ -429,21 +459,24 @@ pub fn run_review_with_runner(
 }
 
 fn reconcile_scores(output: &mut ReviewOutput) {
-    if (output.summary.overall_score - output.overall_score).abs() > SCORE_TOLERANCE {
-        let scored: Vec<f64> = output.grades.values().filter_map(|g| g.score()).collect();
-        let canonical = if scored.is_empty() {
-            output.overall_score
-        } else {
-            (scored.iter().sum::<f64>() / scored.len() as f64 * 10.0).round() / 10.0
-        };
+    let scored: Vec<f64> = output.grades.values().filter_map(|g| g.score()).collect();
+    let mean = if scored.is_empty() {
+        output.overall_score
+    } else {
+        (scored.iter().sum::<f64>() / scored.len() as f64 * 10.0).round() / 10.0
+    };
+    let needs_fix = (output.summary.overall_score - output.overall_score).abs()
+        > MEAN_DRIFT_TOLERANCE
+        || (output.summary.overall_score - mean).abs() > MEAN_DRIFT_TOLERANCE;
+    if needs_fix {
         tracing::warn!(
             rule = "V1",
-            "score reconciled: summary={} top_level={} → {canonical}",
+            "score reconciled: summary={} top_level={} → {mean}",
             output.summary.overall_score,
             output.overall_score
         );
-        output.summary.overall_score = canonical;
-        output.overall_score = canonical;
+        output.summary.overall_score = mean;
+        output.overall_score = mean;
     }
 }
 
@@ -479,7 +512,7 @@ fn map_pipeline_error(e: PipelineError) -> ReviewError {
         PipelineError::AgentInvocation {
             source: RunError::QuotaExceeded(info),
         } => ReviewError::AgentQuotaExceeded {
-            raw_message: Some(format!("{info:?}")),
+            raw_message: Some(info.raw_message.clone()),
         },
         PipelineError::AgentInvocation {
             source: RunError::TimedOut { .. },
@@ -514,20 +547,10 @@ fn read_template(path: &Path) -> Result<String, ReviewError> {
     })
 }
 
-fn read_schema(path: &Path) -> Result<Value, ReviewError> {
-    let text = read_template(path)?;
-    serde_json::from_str(&text).map_err(|e| ReviewError::InvalidSchema {
-        message: format!("{}: {e}", path.display()),
-    })
-}
-
-fn validate_against(schema: &Value, instance: &Value) -> Result<(), Vec<String>> {
-    validate_json(schema, instance)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     #[test]
     fn input_round_trips_minimal() {

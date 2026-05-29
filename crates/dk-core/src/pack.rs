@@ -30,7 +30,8 @@ pub const REPORT_TEMPLATE: &str = include_str!("../../../templates/default/templ
 /// Input schema (`schemas/review-input.json`).
 pub const INPUT_SCHEMA: &str = include_str!("../../../templates/default/schemas/input.schema.json");
 /// Output schema (`schemas/review.json`).
-pub const OUTPUT_SCHEMA: &str = include_str!("../../../templates/default/schemas/output.schema.json");
+pub const OUTPUT_SCHEMA: &str =
+    include_str!("../../../templates/default/schemas/output.schema.json");
 
 pub fn prompt_path(dir: &Path) -> PathBuf {
     dir.join("templates").join("review.md")

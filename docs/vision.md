@@ -22,12 +22,10 @@ command + args → template render → agent → structured output → report
 ```
 dk init  [-a --agent <agent>] [-m --model <model>] [--template-pack <url-or-folder>]
 dk review [<path>]           [-a --agent] [-m --model] [--output-format] [--output-file]
-                              [--title <text>] [--description <file|text>] [--base-ref <ref>] [--head-ref <ref>]
-                              [--focus <area>]... [--max-findings <n>]
-dk drift  [<path>] [--since <ref>] [-a --agent] [-m --model] [--output-format] [--output-file]
+                               [--title <text>] [--description <file|text>] [--base-ref <ref>] [--head-ref <ref>]
+                               [--focus <area>]... [--max-findings <n>]
 dk check  [<path>]           [-a --agent] [-m --model] [--output-format] [--output-file] [--verbose]
 dk doctor
-dk serve  --with-api [--host <host>] [--port <port>]
 dk mcp    [<flags>]
 ```
 
@@ -39,10 +37,6 @@ Interactive setup. Prompts for each parameter not provided on the command line. 
 
 Evaluates code against a structured review rubric (default: Google eng-practices, 13 dimensions, 0–10 scores). Produces per-dimension scores, a verdict (`approve`, `approve_with_comments`, `request_changes`, `reject`), actionable findings, and suggested next steps. Accepts PR/CL change context (`--title`, `--description`, `--base-ref`, `--head-ref`) and optional focus areas. The rubric methodology ships as a default template (`templates/methodology.md`) that users can edit or replace via the template pack. Works on any directory; no git required. Spec pack: `specs/review/` (schemas, prompt/report templates, examples).
 
-### `dk drift [<path>] [--since <ref>]`
-
-Evaluates architectural trajectory over time. Detects degradation patterns, boundary erosion, coupling growth. The agent compares states using git commands on the working directory. Default `--since` is `HEAD~1` (previous commit). Requires a git repository.
-
 ### `dk check [<path>]`
 
 Pass/fail gate for CI and pre-commit hooks. Runs `dk review` internally and maps the verdict to exit codes: `approve` or `approve_with_comments` → exit 0, `request_changes` or `reject` → exit 1. Always outputs a findings summary on failure. `--verbose` produces the full scored report.
@@ -50,10 +44,6 @@ Pass/fail gate for CI and pre-commit hooks. Runs `dk review` internally and maps
 ### `dk doctor`
 
 Reports on the runtime environment: installed agents, effective configuration file (after walking up directories), template pack status, agent reachability.
-
-### `dk serve --with-api`
-
-HTTP server exposing a JSON API (`POST /review`, `POST /drift`, `POST /check`). Options: `--host` (default: `127.0.0.1`), `--port` (default: `8080`).
 
 ### `dk mcp`
 
@@ -77,15 +67,12 @@ Installed by `dk init` into `.dk/`. Structure:
 .dk/
 ├── templates/
 │   ├── review.md          # prompt template with {{slots}}
-│   ├── methodology.md     # review rubric (default: Google eng-practices); user-editable
-│   └── drift.md
+│   └── methodology.md     # review rubric (default: Google eng-practices); user-editable
 ├── schemas/
 │   ├── review-input.json  # JSON Schema for CLI/API input
-│   ├── review.json        # JSON Schema for agent output
-│   └── drift.json
+│   └── review.json        # JSON Schema for agent output
 ├── reports/
-│   ├── review.md          # report layout template
-│   └── drift.md
+│   └── review.md          # report layout template
 └── dk.toml                # control file
 ```
 
@@ -135,7 +122,7 @@ Delegated to aikit-sdk's structured pipeline:
 
 ## Git requirements
 
-`review` and `check` work on any directory. Only `drift` requires a git repository.
+`review` and `check` work on any directory. `--from-git` derives PR context when inside a git repository.
 
 ## Inspiration: CodeScene CLI reference
 
