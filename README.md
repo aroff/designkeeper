@@ -8,13 +8,13 @@ Agent-driven code review with a scored rubric and a pass/fail exit code.
 
 **macOS**
 ```sh
-brew install aroff/cli/dk
+brew install aroff/cli/designkeeper
 ```
 
 **Windows**
 ```sh
 scoop bucket add aroff https://github.com/aroff/scoop-bucket
-scoop install dk
+scoop install designkeeper
 ```
 
 **Cargo**
