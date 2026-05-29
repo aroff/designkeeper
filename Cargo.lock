@@ -825,7 +825,7 @@ dependencies = [
 
 [[package]]
 name = "dk"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "aikit-sdk",
  "anyhow",
@@ -841,7 +841,7 @@ dependencies = [
 
 [[package]]
 name = "dk-core"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "aikit-sdk",
  "globset",
