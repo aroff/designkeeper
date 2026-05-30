@@ -18,9 +18,9 @@ use cli_framework::mcp::McpToolExportPolicy;
 use cli_framework::prelude::*;
 use cli_framework::spec::arg_spec::{ArgKind, ArgValueType, Cardinality};
 
-use dk_core::config::{default_config, find_up, resolve_config, DkConfig, OutputFormat};
+use dk_core::config::{default_config, resolve_config, DkConfig, OutputFormat};
 use dk_core::review::Progress;
-use dk_core::{pack, review, run_check, ReviewInput, ReviewOptions};
+use dk_core::{pack_store, review, run_check, ReviewInput, ReviewOptions};
 use dk_core::{run_init, InitParams};
 use dk_core::{ChangeContext, Dimension, FocusArea};
 
@@ -45,6 +45,7 @@ async fn main() -> anyhow::Result<()> {
         .register_command(review_command())?
         .register_command(check_command())?
         .register_command(init_command())?
+        .register_command(install_command())?
         .register_module(DoctorModule::new(doctor::checks()))?
         .build(DkContext)?;
     let mut app = app;
@@ -184,21 +185,16 @@ fn init_command() -> Command {
     let args = vec![
         opt("agent", Some('a'), "Default agent key (e.g. claude, codex)"),
         opt("model", Some('m'), "Default model override (optional)"),
-        opt(
-            "template-pack",
-            None,
-            "Template pack source: 'default', a local folder, or a URL",
-        ),
     ];
     let spec = CommandSpec {
-        summary: "Scaffold .dk/ and write dk.toml (interactive when flags are omitted)",
+        summary: "Install packs from dk-templates.toml and write dk.toml",
         args,
         ..Default::default()
     };
     Command {
         id: "init",
-        summary: "Scaffold .dk/ and write dk.toml",
-        syntax: Some("init [--agent <a>] [--model <m>] [--template-pack <url-or-folder>]"),
+        summary: "Install template packs and scaffold dk.toml",
+        syntax: Some("init [--agent <a>] [--model <m>]"),
         category: Some("setup"),
         spec: Some(Arc::new(spec)),
         validator: None,
@@ -207,9 +203,54 @@ fn init_command() -> Command {
     }
 }
 
+fn install_command() -> Command {
+    let args = vec![
+        ArgSpec {
+            name: "global",
+            kind: ArgKind::Flag,
+            short: Some('g'),
+            long: None,
+            value_type: ArgValueType::Bool,
+            cardinality: Cardinality::Optional,
+            default: None,
+            conflicts_with: vec![],
+            requires: vec![],
+            help: "Install packs to ~/.dk/packs/ (user-global) instead of .dk/packs/",
+        },
+        ArgSpec {
+            name: "source",
+            kind: ArgKind::Positional,
+            short: None,
+            long: None,
+            value_type: ArgValueType::String,
+            cardinality: Cardinality::Optional,
+            default: None,
+            conflicts_with: vec![],
+            requires: vec![],
+            help: "Pack source: owner/repo, URL, or local path. Omit to install all official packs.",
+        },
+    ];
+    let spec = CommandSpec {
+        summary: "Install template packs from GitHub, a URL, or a local path",
+        args,
+        ..Default::default()
+    };
+    Command {
+        id: "install",
+        summary: "Install template packs",
+        syntax: Some("install [--global] [<source>]"),
+        category: Some("setup"),
+        spec: Some(Arc::new(spec)),
+        validator: None,
+        expose_mcp: false,
+        execute: Arc::new(|_ctx, args| Box::pin(async move { run_install_cmd(args) })),
+    }
+}
+
 /// Flags shared by `review` and `check`.
 fn common_args() -> Vec<ArgSpec> {
     vec![
+        opt("template", Some('t'), "Template pack name (required, e.g. default, structural)"),
         opt("agent", Some('a'), "Agent key (overrides dk.toml)"),
         opt("model", Some('m'), "Model override (overrides dk.toml)"),
         opt(
@@ -278,9 +319,15 @@ fn run_review_cmd(args: CommandArgs) -> anyhow::Result<()> {
         Ok(i) => i,
         Err(msg) => fail("DK_INPUT_VALIDATION", &msg),
     };
-    let template_dir = match ensure_template_dir(&cwd) {
+    let template_name = args.named.get("template").cloned().unwrap_or_else(|| {
+        fail(
+            "DK_INPUT_VALIDATION",
+            "--template is required. Run `dk install` to see available packs.",
+        )
+    });
+    let template_dir = match pack_store::resolve_pack(&template_name, &cwd) {
         Ok(d) => d,
-        Err(e) => fail("DK_IO_ERROR", &e.to_string()),
+        Err(e) => fail(e.code(), &e.to_string()),
     };
 
     let reporter = ProgressReporter::new(&config.agent.agent);
@@ -317,9 +364,15 @@ fn run_check_cmd(args: CommandArgs) -> anyhow::Result<()> {
         Ok(i) => i,
         Err(msg) => fail("DK_INPUT_VALIDATION", &msg),
     };
-    let template_dir = match ensure_template_dir(&cwd) {
+    let template_name = args.named.get("template").cloned().unwrap_or_else(|| {
+        fail(
+            "DK_INPUT_VALIDATION",
+            "--template is required. Run `dk install` to see available packs.",
+        )
+    });
+    let template_dir = match pack_store::resolve_pack(&template_name, &cwd) {
         Ok(d) => d,
-        Err(e) => fail("DK_IO_ERROR", &e.to_string()),
+        Err(e) => fail(e.code(), &e.to_string()),
     };
     let verbose = flag(&args, "verbose");
 
@@ -345,8 +398,6 @@ fn run_check_cmd(args: CommandArgs) -> anyhow::Result<()> {
 
 fn run_init_cmd(args: CommandArgs) -> anyhow::Result<()> {
     let cwd = current_dir();
-    // Seed defaults from an existing dk.toml so re-running is iterative. A
-    // malformed file falls back to built-in defaults rather than blocking init.
     let existing = resolve_config(&cwd).unwrap_or_else(|_| default_config());
 
     let agent = prompt_or_default(args.named.get("agent"), "Agent", &existing.agent.agent);
@@ -357,37 +408,72 @@ fn run_init_cmd(args: CommandArgs) -> anyhow::Result<()> {
         model_default,
     );
     let model = Some(model_raw).filter(|m| !m.trim().is_empty());
-    let pack = prompt_or_default(
-        args.named.get("template-pack"),
-        "Template pack",
-        &existing.templates.pack,
-    );
 
-    let params = InitParams { agent, model, pack };
+    let params = InitParams { agent, model };
     let outcome = match run_init(&cwd, &params) {
         Ok(o) => o,
         Err(e) => fail(e.code(), &e.to_string()),
     };
 
-    let verb = if outcome.updated_existing {
-        "Updated"
-    } else {
-        "Created"
-    };
+    let verb = if outcome.updated_existing { "Updated" } else { "Created" };
     println!("{verb} {}", outcome.config_path.display());
-    match &outcome.pack_source {
-        dk_core::PackSource::Embedded => {
-            println!(
-                "Installed default template pack at {}",
-                outcome.dk_dir.display()
-            );
+    if outcome.installed_packs.is_empty() {
+        println!("No packs installed (check dk-templates.toml sources).");
+    } else {
+        for p in &outcome.installed_packs {
+            println!("✓ installed {} → {}", p.name, p.path.display());
         }
-        dk_core::PackSource::LocalDir(src) => {
-            println!(
-                "Copied template pack from {} to {}",
-                src.display(),
-                outcome.dk_dir.display()
-            );
+    }
+    Ok(())
+}
+
+fn run_install_cmd(args: CommandArgs) -> anyhow::Result<()> {
+    let cwd = current_dir();
+    let global = flag(&args, "global");
+
+    let dest_base = if global {
+        match dirs::home_dir() {
+            Some(h) => h.join(".dk").join("packs"),
+            None => fail("DK_IO_ERROR", "cannot determine home directory for --global install"),
+        }
+    } else {
+        cwd.join(".dk").join("packs")
+    };
+
+    if let Some(source) = args.named.get("source") {
+        // Install a single specified pack
+        match dk_core::pack_store::install_pack(source, &dest_base) {
+            Ok(p) => println!("✓ installed {} → {}", p.name, p.path.display()),
+            Err(e) => fail(e.code(), &e.to_string()),
+        }
+    } else {
+        // Install all packs from dk-templates.toml
+        let manifest = dk_core::DkTemplatesManifest::resolve(&cwd);
+        let mut any = false;
+        for entry in &manifest.packs {
+            match dk_core::pack_store::install_pack(&entry.source, &dest_base) {
+                Ok(p) => {
+                    println!("✓ installed {} → {}", p.name, p.path.display());
+                    any = true;
+                }
+                Err(e) => {
+                    eprintln!("  ! skipped {} ({}): {}", entry.name, entry.source, e);
+                    // Try embedded fallback for built-ins
+                    let fallback_dest = dest_base.join(&entry.name);
+                    let wrote = match entry.name.as_str() {
+                        "default" => dk_core::pack::write_default_pack(&fallback_dest).is_ok(),
+                        "structural" => dk_core::pack::write_structural_pack(&fallback_dest).is_ok(),
+                        _ => false,
+                    };
+                    if wrote {
+                        println!("  → installed {} from embedded fallback", entry.name);
+                        any = true;
+                    }
+                }
+            }
+        }
+        if !any {
+            eprintln!("No packs could be installed. Check dk-templates.toml sources.");
         }
     }
     Ok(())
@@ -568,24 +654,6 @@ fn read_file_or_text(value: &str) -> String {
 
 fn flag(args: &CommandArgs, name: &str) -> bool {
     args.named.get(name).map(|v| v == "true").unwrap_or(false)
-}
-
-/// Use `.dk/` if present (walking up from cwd); otherwise materialize the
-/// embedded default template pack to a temp dir (spec decision #6).
-fn ensure_template_dir(cwd: &Path) -> Result<PathBuf, std::io::Error> {
-    if let Some(dk) = find_up(cwd, |dir| {
-        let dk = dir.join(".dk");
-        if pack::prompt_path(&dk).is_file() {
-            Some(dk)
-        } else {
-            None
-        }
-    }) {
-        return Ok(dk);
-    }
-    let base = std::env::temp_dir().join(format!("dk-pack-{}", std::process::id()));
-    pack::write_default_pack(&base)?;
-    Ok(base)
 }
 
 /// Write `content` to `--output-file` if set, otherwise to stdout.

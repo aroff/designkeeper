@@ -11,13 +11,13 @@ use cli_framework::doctor::{CheckSeverity, DoctorCheck, DoctorFinding, DoctorFut
 use cli_framework::prelude::AppContext;
 
 use dk_core::config::{find_up, resolve_config};
-use dk_core::pack;
+use dk_core::pack_store;
 
 /// All `dk` doctor checks, ready to hand to `DoctorModule::new`.
 pub fn checks() -> Vec<std::sync::Arc<dyn DoctorCheck>> {
     vec![
         std::sync::Arc::new(ConfigCheck),
-        std::sync::Arc::new(TemplatePackCheck),
+        std::sync::Arc::new(InstalledPacksCheck),
         std::sync::Arc::new(InstalledAgentsCheck),
         std::sync::Arc::new(AgentReachabilityCheck),
     ]
@@ -65,8 +65,8 @@ impl DoctorCheck for ConfigCheck {
                 Ok(cfg) => {
                     let model = cfg.agent.model.as_deref().unwrap_or("(default)");
                     let detail = format!(
-                        "agent = {}\nmodel = {}\noutput = {:?}\npack = {}",
-                        cfg.agent.agent, model, cfg.output.format, cfg.templates.pack
+                        "agent = {}\nmodel = {}\noutput = {:?}",
+                        cfg.agent.agent, model, cfg.output.format
                     );
                     match find_up(&dir, |d| {
                         let p = d.join("dk.toml");
@@ -105,40 +105,44 @@ impl DoctorCheck for ConfigCheck {
 
 // ---------------------------------------------------------------------------
 
-struct TemplatePackCheck;
-impl DoctorCheck for TemplatePackCheck {
+struct InstalledPacksCheck;
+impl DoctorCheck for InstalledPacksCheck {
     fn id(&self) -> &'static str {
-        "template-pack"
+        "installed-packs"
     }
     fn title(&self) -> &'static str {
-        "Template pack"
+        "Installed template packs"
     }
     fn description(&self) -> Option<&'static str> {
-        Some("Checks for an installed .dk/ template pack")
+        Some("Lists installed template packs (project-local and global)")
     }
     fn run(&self, _ctx: &dyn AppContext) -> DoctorFuture {
         Box::pin(async {
             let dir = cwd();
-            match find_up(&dir, |d| {
-                let dk = d.join(".dk");
-                if dk.exists() { Some(dk) } else { None }
-            }) {
-                Some(dk) if pack::prompt_path(&dk).is_file() => finding(
-                    "template-pack",
-                    "Template pack",
-                    CheckSeverity::Ok,
-                    format!("Installed at {}", dk.display()),
-                    None,
-                    None,
-                ),
-                _ => finding(
-                    "template-pack",
-                    "Template pack",
+            let packs = pack_store::list_packs(&dir);
+            if packs.is_empty() {
+                finding(
+                    "installed-packs",
+                    "Installed template packs",
                     CheckSeverity::Warning,
-                    "No .dk/ template pack found; using embedded defaults".to_string(),
+                    "No template packs installed. Built-in fallbacks (default, structural) are available.".to_string(),
                     None,
-                    Some("Run `dk init` to install an editable template pack.".to_string()),
-                ),
+                    Some("Run `dk install` to fetch and install packs.".to_string()),
+                )
+            } else {
+                let detail = packs
+                    .iter()
+                    .map(|p| format!("{} ({}) — {}", p.name, p.scope, p.path.display()))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                finding(
+                    "installed-packs",
+                    "Installed template packs",
+                    CheckSeverity::Ok,
+                    format!("{} pack(s) installed", packs.len()),
+                    Some(detail),
+                    None,
+                )
             }
         })
     }

@@ -10,6 +10,8 @@ pub mod discovery;
 pub mod git;
 pub mod init;
 pub mod pack;
+pub mod pack_store;
+pub mod remote;
 pub mod review;
 pub mod slots;
 pub mod validation;
@@ -20,6 +22,10 @@ pub use config::{
     OutputFormat, ScanConfig, TemplatesConfig,
 };
 pub use init::{run_init, InitError, InitOutcome, InitParams, PackSource};
+pub use pack_store::{
+    install_pack, list_packs, resolve_pack, DkTemplatesManifest, InstalledPack, PackEntry,
+    PackScope, PackStoreError,
+};
 pub use review::{
     run_review, run_review_with_runner, ChangeContext, Dimension, Finding, FocusArea, GradeEntry,
     Progress, ProgressFn, ProjectHints, ReviewError, ReviewInput, ReviewOptions, ReviewOutput,

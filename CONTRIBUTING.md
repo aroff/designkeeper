@@ -1,131 +1,81 @@
-# CONTEXT.md — DesignKeeper
+# Contributing to DesignKeeper
+
+## Architecture
+
+Two crates in `crates/`:
+
+- **`dk-core`** — domain layer. Config resolution, file discovery, template pack management (`pack`, `pack_store`, `remote`), prompt slot assembly, the review/check pipeline, init scaffolding. No CLI dependency; reusable by any front-end.
+- **`dk`** — thin `cli-framework` binary shell. Command registration, argument parsing, I/O formatting. All logic delegates to `dk-core` and `aikit-sdk`.
+
+External dependencies worth knowing:
+- **`aikit-sdk`** — template rendering, agent subprocess invocation, schema validation, retry, report rendering, remote pack fetching (`TemplateSource`, `fetch_package_to_dir`).
+- **`cli-framework`** — command registration, MCP server, doctor module.
 
 ## Glossary
 
-### DesignKeeper (`dk`)
+**Template pack** — a directory with a fixed layout (`templates/review.md`, `templates/methodology.md`, `reports/review.md`, `schemas/review-input.json`, `schemas/review.json`) plus an `aikit.toml` manifest. Installed under `.dk/packs/{name}/` (project-local) or `~/.dk/packs/{name}/` (global). The two built-in packs (`default`, `structural`) are embedded in the binary as fallbacks.
 
-An architecture and design compliance CLI tool. Core pipeline: prompt → template-based render → agent → structured output. CodeScene is the UX inspiration (commands, output style), not the domain. `review` and `check` work on any directory; only `drift` requires a git repository. The CLI is built on `cli-framework` (command registration, argument parsing, MCP server) and delegates the structured pipeline to `aikit-sdk` (template rendering, agent invocation, schema validation, retry, report rendering).
+**`dk-templates.toml`** — the official pack manifest at the repo root, embedded in the binary. Lists pack names and their GitHub sources. `dk init` and `dk install` (with no args) read this to know what to fetch.
 
-### Core Crate (`dk-core`)
+**Pack resolution order** — project-local → global → embedded fallback (for `default`/`structural`) → `DK_PACK_NOT_FOUND`.
 
-The domain layer: file discovery (for default targets), config resolution (walk up directories, dk.toml parsing), init scaffolding (interactive prompts, template pack fetch), and command orchestration. The prompt→agent→validation→report pipeline is delegated to aikit-sdk's structured pipeline feature. Reused by the CLI, `serve`, and `mcp` without going through CLI dispatch.
+**`--template`** — required flag on `dk review` and `dk check`. No default; the user always names the pack explicitly.
 
-### CLI Crate (`dk`)
+**Response pipeline** — `dk` builds a prompt (methodology + target + schema slots), hands it to the agent, extracts the JSON block, validates against the pack's output schema, retries up to 2 times on failure.
 
-A thin `cli-framework` binary shell: command registration, argument parsing, I/O formatting. Delegates all logic to the Core Crate.
+**Control file** — `dk.toml`, walked up from CWD. Fields: `[scan]` (extensions, ignore_patterns), `[output]` (format), `[agent]` (agent, model). No `[templates]` section — pack selection is per-command.
 
-### Agent
-
-A full-featured coding agent (e.g. Claude Code, Opencode, Cursor) invoked via `aikit-sdk` (Rust library). The agent has filesystem access and works freely on the working directory. `dk` provides a task directive; the agent reads files, explores context, and produces a structured response independently. The agent's own LLM dependencies (API keys, providers) are managed by the agent runtime, not by `dk` directly.
-
-### Template Pack
-
-A set of files fetched from a GitHub URL into the project's `.dk/` directory by `dk init`. Organized as: `templates/` (prompt templates per command), `schemas/` (JSON output schemas per command), `reports/` (report layout templates per command). The default pack ships from the `dk` repo; alternative sources may be specified via `dk init` arguments. Users may edit installed files to customize behavior, including the review methodology (`templates/methodology.md`).
-
-### Prompt Assembly
-
-`dk` constructs a task directive from the template pack, not a full context payload. The prompt contains: methodology, target path(s), and expected output schema. Named slots (e.g. `{{methodology}}`, `{{target}}`, `{{output_schema}}`) are filled programmatically. The agent reads source files and project documentation from the filesystem itself.
-
-### Response Pipeline
-
-Delegated to aikit-sdk's structured pipeline. aikit-sdk validates the agent's response against the template pack's output schema, retries (up to 2 attempts) with augmented prompts including validation error details, and renders the final report. dk provides template paths, slot values, agent config, and output format. Default output format is markdown; override with `--output-format json`. Default output is stdout; `--output-file <path>` writes to disk.
-
-### Control File
-
-An optional `dk.toml` in the project root (or parent directories), created by `dk init` or manually. `dk` walks up directories to find it. Fields:
-
-```toml
-[scan]
-extensions = [".rs", ".ts"]        # override default file types
-ignore_patterns = ["vendor/", "generated/"]
-
-[output]
-format = "markdown"                # or "json"
-
-[agent]
-agent = "claude"                   # default agent key
-model = ""                         # optional model override
-
-[templates]
-pack = "default"                   # GitHub URL or local folder path
-```
-
-When absent, `dk` uses built-in defaults.
-
-### File Discovery
-
-`dk` uses the `ignore` crate for fast recursive file walking (respects .gitignore) and `globset` for pattern matching. Used to determine default analysis targets when the user doesn't specify a path, and to enumerate files for `dk check`. The agent reads the actual file content independently. Default recognized extensions: `.rs`, `.ts`, `.tsx`, `.js`, `.jsx`, `.py`, `.go`, `.java`, `.kt`, `.c`, `.cpp`, `.h`, `.hpp`, `.rb`, `.ex`, `.exs`, `.scala`, `.swift`, `.cs`. Extendable via control file.
-
-### Review
-
-Evaluates a code snapshot or change against a structured review rubric (default: Google eng-practices, 13 dimensions, 0–10 scores). Produces per-dimension scores, a verdict (`approve`, `approve_with_comments`, `request_changes`, `reject`), actionable findings, and suggested next steps. Accepts PR/CL change context (`--title`, `--description`, `--base-ref`, `--head-ref`) and optional focus areas (`--focus`). The rubric methodology ships as a default template (`templates/methodology.md`) that users can edit or replace via the template pack. Works on any directory; git refs optional. Spec pack: `specs/review/`.
-
-### Drift
-
-Evaluates architectural trajectory over time. Detects degradation patterns, boundary erosion, and coupling growth. Answers: "are we getting worse?" Accepts `--since <ref>` to scope the temporal window (default: previous commit, `HEAD~1`). The agent compares states using git commands on the working directory.
-
-### Check
-
-A strict pass/fail gate for automation (CI, pre-commit hooks). Runs `review` internally and maps the verdict to exit codes: `approve` or `approve_with_comments` → exit 0, `request_changes` or `reject` → exit 1. Always outputs a findings summary on failure. `--verbose` produces the full scored report.
-
-### Doctor
-
-A diagnostic command that reports on the runtime environment: installed agents, the effective configuration file (after walking up directories), template pack status, and agent reachability.
-
-### `.dk/` Directory
-
-The per-project directory (at repository root, or overridable) created by `dk init`. Structure:
+## Current command interface
 
 ```
-.dk/
+dk init    [-a --agent <a>] [-m --model <m>]
+dk install [-g --global] [<source>]
+dk review  --template <name> [<path>] [-a --agent] [-m --model]
+           [--output-format] [--output-file]
+           [--title] [--description] [--base-ref] [--head-ref] [--from-git]
+           [--focus <area>]... [--max-findings <n>] [--include-dimensions]
+dk check   --template <name> [<path>] [-a --agent] [-m --model]
+           [--output-format] [--output-file] [--from-git] [-v --verbose]
+dk doctor  [-j --json] [-c --check <id>]
+dk mcp serve [--transport stdio|http]
+```
+
+## Template pack layout
+
+Source packs live under `templates/{name}/` in this repo:
+
+```
+templates/{name}/
+├── aikit.toml               # [package] name, version, description
 ├── templates/
-│   ├── review.md
-│   ├── methodology.md
-│   └── drift.md
-├── schemas/
-│   ├── review-input.json
-│   ├── review.json
-│   └── drift.json
+│   ├── review.md            # prompt template ({{slots}})
+│   └── methodology.md       # review rubric
 ├── reports/
-│   ├── review.md
-│   └── drift.md
-└── dk.toml              # control file
+│   └── review.md            # report layout
+└── schemas/
+    ├── review-input.json
+    └── review.json          # output schema
 ```
 
-Users may edit any file to customize behavior.
+File names must match exactly — `pack.rs` resolves them by convention, not config.
 
-### Serve
+The `default` pack uses Google Engineering Practices (13 dimensions, severity `blocker/major/minor/nit`). The `structural` pack uses the Structure · Complexity · Expressiveness rubric (9 sub-dimensions, severity `critical/high/medium/low`, score < 4 triggers a quality penalty).
 
-Starts an HTTP server exposing a JSON API (`POST /review`, `POST /drift`, `POST /check`) for programmatic access to `dk` commands. Required flag: `--with-api`. Options: `--host <host>` (default: `127.0.0.1`), `--port <port>` (default: `8080`).
+## Running tests
 
-### MCP
-
-A separate command (`dk mcp`) that starts an MCP server exposing `dk` commands as MCP tools. Uses cli-framework's `mcp-server` feature. Future: stdio transport mode (not currently supported in cli-framework).
-
-### JSON Extraction
-
-The agent returns freeform text containing a ```` ```json ```` code block. aikit-sdk extracts the JSON from this block for schema validation.
-
-### Check Output
-
-`dk check` always outputs a findings summary on failure (violations found). `--verbose` produces the full scored report (equivalent to `dk review` output but with pass/fail exit code semantics).
-
-## Command Interface
-
-```
-dk init  [-a --agent <agent>] [-m --model <model>] [--template-pack <url-or-folder>]
-dk review [<path>]           [-a --agent] [-m --model] [--output-format] [--output-file]
-                              [--title <text>] [--description <file|text>] [--base-ref <ref>] [--head-ref <ref>]
-                              [--focus <area>]... [--max-findings <n>]
-dk drift  [<path>] [--since <ref>] [-a --agent] [-m --model] [--output-format] [--output-file]
-dk check  [<path>]           [-a --agent] [-m --model] [--output-format] [--output-file] [--verbose]
-dk doctor
-dk serve  --with-api [--host <host>] [--port <port>]
-dk mcp    [<flags>]
+```sh
+bash scripts/run-tests.sh
 ```
 
-Agent and model flags on review/drift/check override defaults from the control file. When absent, values from `dk.toml` `[agent]` section apply.
+Runs in order: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test --all-features`, then CLI smoke tests. The smoke tests build the binary and exercise every command's safe surface without a live agent call — they need only a Rust toolchain.
 
-### Init Flow
+Add a smoke assertion in `scripts/run-tests.sh` whenever you add a new subcommand or error code.
 
-`dk init` is interactive when arguments are not provided on the command line. It prompts for each parameter sequentially. For agent selection, `dk` uses aikit-sdk to detect installed agents and presents a closed list to choose from. Running `dk init` on an existing `.dk/` directory updates values in place — it is iterative, not one-shot.
+## Adding a template pack
+
+1. Create `templates/{name}/` with the layout above.
+2. Add an `aikit.toml` with `[package] name`, `version`, `description`.
+3. Add an entry to `dk-templates.toml` at the repo root.
+4. Add `include_str!` constants to `crates/dk-core/src/pack.rs` and a `write_{name}_pack` function.
+5. Add the embedded fallback branch to `pack_store::write_embedded_pack_to_temp` and `init::write_embedded_fallback`.
+6. Update smoke tests in `scripts/run-tests.sh`.

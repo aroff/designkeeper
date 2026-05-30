@@ -1,0 +1,5 @@
+[package]
+name = "structural"
+version = "1.0.0"
+description = "Structural code quality review — Structure, Complexity, Expressiveness"
+authors = ["DesignKeeper"]
