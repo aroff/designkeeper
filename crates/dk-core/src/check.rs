@@ -1,17 +1,15 @@
 //! `dk check` — runs a review and maps the verdict to a process exit code.
 
 use std::path::Path;
-use std::process::ExitCode;
 
 use aikit_sdk::AgentRunner;
 
 use crate::config::DkConfig;
-use crate::review::{self, build_agent_runner, ProgressFn, ReviewInput, ReviewOutput, Severity};
+use crate::review::{self, build_agent_runner, ProgressFn};
+use crate::types::{ReviewInput, ReviewOutput, Severity};
 
 /// Result of a `dk check` run.
 pub struct CheckResult {
-    /// Process exit code: SUCCESS for approve/approve_with_comments, else FAILURE.
-    pub exit_code: ExitCode,
     /// True when the verdict passed (approve / approve_with_comments).
     pub passed: bool,
     /// Full scored report (markdown), populated when `verbose` is set and the
@@ -61,23 +59,13 @@ pub fn run_check_with_runner(
                 Some(findings_summary(&output))
             };
             CheckResult {
-                exit_code: if passed {
-                    ExitCode::SUCCESS
-                } else {
-                    ExitCode::FAILURE
-                },
                 passed,
                 report,
                 findings_summary,
-                fail_code: if passed {
-                    None
-                } else {
-                    Some("DK_CHECK_FAILED")
-                },
+                fail_code: if passed { None } else { Some("DK_CHECK_FAILED") },
             }
         }
         Err(err) => CheckResult {
-            exit_code: ExitCode::FAILURE,
             passed: false,
             report: None,
             findings_summary: Some(format!("review failed [{}]: {err}", err.code())),

@@ -70,35 +70,42 @@ pub fn log_format(cwd: &Path, format: &str, git_ref: &str) -> Option<String> {
     }
 }
 
+/// Derive a [`crate::types::ChangeContext`] and optional filtered target from git.
+pub fn change_context_from_git(
+    cwd: &Path,
+    base: &str,
+    extensions: &[String],
+) -> (crate::types::ChangeContext, Option<String>) {
+    let head = "HEAD";
+    let title = log_format(cwd, "%s", head);
+    let description = log_format(cwd, "%b", head);
+    let diff_stat = diff_stat(cwd, base, head);
+    let mut target = None;
+    if let Some(files) = changed_files(cwd, base, head) {
+        let filtered: Vec<String> = files
+            .into_iter()
+            .filter(|f| extensions.iter().any(|ext| f.ends_with(ext.as_str())))
+            .collect();
+        if !filtered.is_empty() {
+            target = Some(filtered.join("\n"));
+        }
+    }
+    let ctx = crate::types::ChangeContext {
+        title,
+        description,
+        base_ref: Some(base.to_string()),
+        head_ref: Some(head.to_string()),
+        diff_stat,
+    };
+    (ctx, target)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::init_repo_with_commit;
     use std::process::Command as Cmd;
     use tempfile::tempdir;
-
-    fn git_available() -> bool {
-        Cmd::new("git").arg("--version").output().is_ok()
-    }
-
-    fn init_repo_with_commit(dir: &Path) -> bool {
-        if !git_available() {
-            return false;
-        }
-        let run = |args: &[&str]| {
-            Cmd::new("git")
-                .current_dir(dir)
-                .args(args)
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
-        };
-        run(&["init"])
-            && run(&["config", "user.email", "test@test.com"])
-            && run(&["config", "user.name", "Test"])
-            && std::fs::write(dir.join("a.rs"), "fn a() {}").is_ok()
-            && run(&["add", "."])
-            && run(&["commit", "-m", "initial commit"])
-    }
 
     fn add_second_commit(dir: &Path) -> bool {
         let run = |args: &[&str]| {
@@ -117,7 +124,7 @@ mod tests {
     #[test]
     fn diff_stat_returns_some_in_git_repo() {
         let dir = tempdir().unwrap();
-        if !init_repo_with_commit(dir.path()) {
+        if !init_repo_with_commit(dir.path(), "initial commit") {
             return; // git not available, skip
         }
         if !add_second_commit(dir.path()) {
@@ -140,7 +147,7 @@ mod tests {
     #[test]
     fn log_format_returns_subject_in_git_repo() {
         let dir = tempdir().unwrap();
-        if !init_repo_with_commit(dir.path()) {
+        if !init_repo_with_commit(dir.path(), "initial commit") {
             return;
         }
         let result = log_format(dir.path(), "%s", "HEAD");
@@ -158,7 +165,7 @@ mod tests {
     #[test]
     fn changed_files_returns_some_in_git_repo() {
         let dir = tempdir().unwrap();
-        if !init_repo_with_commit(dir.path()) {
+        if !init_repo_with_commit(dir.path(), "initial commit") {
             return;
         }
         if !add_second_commit(dir.path()) {
