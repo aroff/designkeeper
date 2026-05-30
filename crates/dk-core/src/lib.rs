@@ -4,6 +4,9 @@
 //! discovery, slot construction, the structured review pipeline (delegated to
 //! `aikit-sdk`), and domain-specific post-validation.
 
+#[cfg(test)]
+pub mod testutil;
+
 pub mod check;
 pub mod config;
 pub mod discovery;
@@ -14,6 +17,7 @@ pub mod pack_store;
 pub mod remote;
 pub mod review;
 pub mod slots;
+pub mod types;
 pub mod validation;
 
 pub use check::{run_check, run_check_with_runner, CheckResult};
@@ -23,12 +27,14 @@ pub use config::{
 };
 pub use init::{run_init, InitError, InitOutcome, InitParams, PackSource};
 pub use pack_store::{
-    install_pack, list_packs, resolve_pack, DkTemplatesManifest, InstalledPack, PackEntry,
-    PackScope, PackStoreError,
+    global_packs_dir, install_pack, install_pack_or_embedded_fallback, list_packs, resolve_pack,
+    DkTemplatesManifest, InstalledPack, PackEntry, PackScope, PackStoreError,
+};
+pub use types::{
+    ChangeContext, Dimension, Finding, FocusArea, GradeEntry, ProjectHints, ReviewInput,
+    ReviewOptions, ReviewOutput, Severity, Summary, Verdict,
 };
 pub use review::{
-    run_review, run_review_with_runner, ChangeContext, Dimension, Finding, FocusArea, GradeEntry,
-    Progress, ProgressFn, ProjectHints, ReviewError, ReviewInput, ReviewOptions, ReviewOutput,
-    Severity, Summary, Verdict,
+    run_review, run_review_with_runner, Progress, ProgressFn, ReviewError,
 };
 pub use validation::{validate_output, ValidationWarning};

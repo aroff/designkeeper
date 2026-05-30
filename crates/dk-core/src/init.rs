@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 use toml_edit::DocumentMut;
 
-use crate::pack_store::{self, DkTemplatesManifest, InstalledPack};
+use crate::pack_store::{self, DkTemplatesManifest, InstalledPack, PackScope};
 
 /// Where a materialized pack came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,29 +87,11 @@ fn install_packs_from_manifest(
         .packs
         .iter()
         .filter_map(|entry| {
-            match pack_store::install_pack(&entry.source, packs_dir) {
-                Ok(installed) => Some(installed),
-                Err(_) => {
-                    // Fall back: write embedded copy for known built-ins
-                    write_embedded_fallback(&entry.name, packs_dir)
-                }
-            }
+            pack_store::install_pack_or_embedded_fallback(entry, packs_dir, PackScope::Project)
+                .ok()
+                .flatten()
         })
         .collect()
-}
-
-fn write_embedded_fallback(name: &str, packs_dir: &Path) -> Option<InstalledPack> {
-    let dest = packs_dir.join(name);
-    let result = match name {
-        "default" => crate::pack::write_default_pack(&dest),
-        "structural" => crate::pack::write_structural_pack(&dest),
-        _ => return None,
-    };
-    result.ok().map(|_| InstalledPack {
-        name: name.to_string(),
-        path: dest,
-        scope: crate::pack_store::PackScope::Embedded,
-    })
 }
 
 fn write_config(path: &Path, params: &InitParams) -> Result<(), InitError> {
