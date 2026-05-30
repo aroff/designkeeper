@@ -8,6 +8,7 @@ description = "DesignKeeper domain layer: review/check orchestration, config, di
 
 [features]
 testing = ["aikit-sdk/testing"]
+test-utils = []
 
 [dependencies]
 serde.workspace = true

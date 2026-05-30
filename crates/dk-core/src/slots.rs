@@ -70,12 +70,9 @@ mod prompt {
     }
 
     fn format_change_context(input: &ReviewInput) -> String {
-        let Some(cc) = &input.change_context else {
+        let Some(cc) = input.change_context.as_ref().filter(|cc| !cc.is_empty()) else {
             return "No PR/CL metadata supplied.".to_string();
         };
-        if cc.is_empty() {
-            return "No PR/CL metadata supplied.".to_string();
-        }
         let mut lines = Vec::new();
         if let Some(title) = &cc.title {
             lines.push(format!("Title: {title}"));
@@ -96,7 +93,7 @@ mod prompt {
         lines.join("\n")
     }
 
-    fn join_keys<T, F: Fn(&T) -> &'static str>(items: &[T], key_fn: F) -> String {
+    fn join_keys<T, F: Fn(&T) -> String>(items: &[T], key_fn: F) -> String {
         items.iter().map(key_fn).collect::<Vec<_>>().join(", ")
     }
 
@@ -109,12 +106,9 @@ mod prompt {
     }
 
     fn format_project_hints(input: &ReviewInput) -> String {
-        let Some(hints) = &input.project_hints else {
+        let Some(hints) = input.project_hints.as_ref().filter(|h| !h.is_empty()) else {
             return "none".to_string();
         };
-        if hints.is_empty() {
-            return "none".to_string();
-        }
         let mut lines = Vec::new();
         if let Some(sg) = &hints.style_guide {
             lines.push(format!("Style guide: {sg}"));
@@ -350,27 +344,19 @@ mod report {
             .join("\n")
     }
 
-    fn bullet_list(items: &[String]) -> String {
+    fn format_list<F: Fn(usize, &str) -> String>(items: &[String], fmt: F) -> String {
         if items.is_empty() {
             return "None.".to_string();
         }
-        items
-            .iter()
-            .map(|i| format!("- {i}"))
-            .collect::<Vec<_>>()
-            .join("\n")
+        items.iter().enumerate().map(|(i, s)| fmt(i, s)).collect::<Vec<_>>().join("\n")
+    }
+
+    fn bullet_list(items: &[String]) -> String {
+        format_list(items, |_, s| format!("- {s}"))
     }
 
     fn numbered_list(items: &[String]) -> String {
-        if items.is_empty() {
-            return "None.".to_string();
-        }
-        items
-            .iter()
-            .enumerate()
-            .map(|(i, s)| format!("{}. {s}", i + 1))
-            .collect::<Vec<_>>()
-            .join("\n")
+        format_list(items, |i, s| format!("{}. {s}", i + 1))
     }
 
     #[cfg(test)]

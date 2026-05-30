@@ -4,7 +4,7 @@
 //! discovery, slot construction, the structured review pipeline (delegated to
 //! `aikit-sdk`), and domain-specific post-validation.
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 pub mod testutil;
 
 pub mod check;
@@ -20,7 +20,7 @@ pub mod slots;
 pub mod types;
 pub mod validation;
 
-pub use check::{run_check, run_check_with_runner, CheckResult};
+pub use check::{run_check, CheckResult};
 pub use config::{
     default_config, find_up, resolve_config, AgentConfig, ConfigError, DkConfig, OutputConfig,
     OutputFormat, ScanConfig, TemplatesConfig,
@@ -31,10 +31,11 @@ pub use pack_store::{
     DkTemplatesManifest, InstalledPack, PackEntry, PackScope, PackStoreError,
 };
 pub use types::{
-    ChangeContext, Dimension, Finding, FocusArea, GradeEntry, ProjectHints, ReviewInput,
-    ReviewOptions, ReviewOutput, Severity, Summary, Verdict,
+    ChangeContext, DEFAULT_MAX_FINDINGS, Dimension, Finding, FocusArea, GradeEntry,
+    NotEvaluatedGrade, ProjectHints, ReviewInput, ReviewOptions, ReviewOutput, ScoredGrade,
+    Severity, Summary, Verdict,
 };
 pub use review::{
-    run_review, run_review_with_runner, Progress, ProgressFn, ReviewError,
+    build_agent_runner, run_review, Progress, ProgressFn, ReviewError,
 };
 pub use validation::{validate_output, ValidationWarning};

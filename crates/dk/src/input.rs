@@ -7,7 +7,7 @@ use cli_framework::prelude::CommandArgs;
 
 use dk_core::config::{resolve_config, DkConfig, OutputFormat};
 use dk_core::pack_store;
-use dk_core::{ChangeContext, Dimension, FocusArea, ReviewInput, ReviewOptions};
+use dk_core::{ChangeContext, DEFAULT_MAX_FINDINGS, Dimension, FocusArea, ReviewInput, ReviewOptions};
 
 pub fn current_dir() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
@@ -79,24 +79,23 @@ pub fn build_change_context(
     cwd: &Path,
     config: &DkConfig,
 ) -> (Option<ChangeContext>, Option<String>) {
-    let from_git = args.named.get("from-git");
-    let mut git_ctx: Option<ChangeContext> = None;
-    let mut git_target: Option<String> = None;
+    let (git_ctx, git_target) = match args.named.get("from-git") {
+        Some(base) => {
+            let (ctx, target) = dk_core::git::change_context_from_git(cwd, base, &config.scan.extensions);
+            (Some(ctx), target)
+        }
+        None => (None, None),
+    };
 
-    if let Some(base) = from_git {
-        let (ctx, target) = dk_core::git::change_context_from_git(cwd, base, &config.scan.extensions);
-        git_ctx = Some(ctx);
-        git_target = target;
-    }
-
-    let (git_title, git_description, git_base_ref, git_head_ref, git_diff_stat) = git_ctx
-        .map(|c| (c.title, c.description, c.base_ref, c.head_ref, c.diff_stat))
-        .unwrap_or_default();
-
-    let title       = args.named.get("title").cloned().or(git_title);
-    let description = args.named.get("description").map(|d| read_file_or_text(d)).or(git_description);
-    let base_ref    = args.named.get("base-ref").cloned().or(git_base_ref);
-    let head_ref    = args.named.get("head-ref").cloned().or(git_head_ref);
+    let title       = args.named.get("title").cloned()
+        .or_else(|| git_ctx.as_ref()?.title.clone());
+    let description = args.named.get("description").map(|d| read_file_or_text(d))
+        .or_else(|| git_ctx.as_ref()?.description.clone());
+    let base_ref    = args.named.get("base-ref").cloned()
+        .or_else(|| git_ctx.as_ref()?.base_ref.clone());
+    let head_ref    = args.named.get("head-ref").cloned()
+        .or_else(|| git_ctx.as_ref()?.head_ref.clone());
+    let git_diff_stat = git_ctx.and_then(|c| c.diff_stat);
 
     let diff_stat = if let (Some(base), Some(head)) = (&base_ref, &head_ref) {
         git_diff_stat.or_else(|| dk_core::git::diff_stat(cwd, base, head))
@@ -104,12 +103,8 @@ pub fn build_change_context(
         git_diff_stat
     };
 
-    let change_context =
-        if title.is_some() || description.is_some() || base_ref.is_some() || head_ref.is_some() {
-            Some(ChangeContext { title, description, base_ref, head_ref, diff_stat })
-        } else {
-            None
-        };
+    let cc = ChangeContext { title, description, base_ref, head_ref, diff_stat };
+    let change_context = if !cc.is_empty() { Some(cc) } else { None };
 
     (change_context, git_target)
 }
@@ -131,7 +126,7 @@ pub fn map_input(args: &CommandArgs, cwd: &Path, config: &DkConfig) -> Result<Re
             }
             n
         }
-        None => 25,
+        None => DEFAULT_MAX_FINDINGS,
     };
 
     let include_dimensions = {
@@ -229,6 +224,7 @@ pub fn prompt_or_default(flag: Option<&String>, label: &str, default: &str) -> S
 mod tests {
     use super::*;
     use dk_core::config::default_config;
+    use dk_core::testutil::{git_available, init_repo_with_commit};
 
     fn args(named: &[(&str, &str)], positional: &[&str]) -> CommandArgs {
         CommandArgs {
@@ -343,33 +339,6 @@ mod tests {
     }
 
     // ---- AC-FG: --from-git tests -------------------------------------------
-
-    fn git_available() -> bool {
-        std::process::Command::new("git")
-            .arg("--version")
-            .output()
-            .is_ok()
-    }
-
-    fn init_repo_with_commit(dir: &std::path::Path, message: &str) -> bool {
-        if !git_available() {
-            return false;
-        }
-        let run = |args: &[&str]| {
-            std::process::Command::new("git")
-                .current_dir(dir)
-                .args(args)
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
-        };
-        run(&["init"])
-            && run(&["config", "user.email", "test@test.com"])
-            && run(&["config", "user.name", "Test"])
-            && std::fs::write(dir.join("a.rs"), "fn a() {}").is_ok()
-            && run(&["add", "."])
-            && run(&["commit", "-m", message])
-    }
 
     #[test]
     fn map_input_from_git_populates_title_in_git_repo() {

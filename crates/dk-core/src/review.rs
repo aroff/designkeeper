@@ -9,12 +9,9 @@ use aikit_sdk::{AgentRunner, Pipeline, PipelineError, TemplateRenderer};
 
 use crate::config::DkConfig;
 use crate::pack;
+use crate::types::{ReviewInput, ReviewOutput};
 use crate::{slots, validation};
 
-pub use crate::types::{
-    ChangeContext, Dimension, Finding, FocusArea, GradeEntry, ProjectHints, ReviewInput,
-    ReviewOptions, ReviewOutput, Severity, Summary, Verdict,
-};
 
 /// Tolerance for the mean-of-grades drift check (V2).
 pub const MEAN_DRIFT_TOLERANCE: f64 = 0.5;
@@ -79,19 +76,8 @@ impl ReviewError {
 // Orchestration
 // ---------------------------------------------------------------------------
 
-/// Run the review pipeline using the real agent from `config`.
+/// Run the review pipeline against an injected `AgentRunner`.
 pub fn run_review(
-    input: ReviewInput,
-    config: &DkConfig,
-    template_dir: &Path,
-    progress: &ProgressFn,
-) -> Result<ReviewOutput, ReviewError> {
-    let runner = build_agent_runner(config, &input);
-    run_review_with_runner(input, config, template_dir, runner, progress)
-}
-
-/// Run the review pipeline against an injected `AgentRunner` (used by tests).
-pub fn run_review_with_runner(
     input: ReviewInput,
     config: &DkConfig,
     template_dir: &Path,
@@ -138,11 +124,9 @@ pub fn run_review_with_runner(
 }
 
 fn reconcile_scores(output: &mut ReviewOutput) {
-    let scored: Vec<f64> = output.grades.values().filter_map(|g| g.score()).collect();
-    let mean = if scored.is_empty() {
-        output.overall_score
-    } else {
-        (scored.iter().sum::<f64>() / scored.len() as f64 * 10.0).round() / 10.0
+    let mean = match output.mean_grade_score() {
+        Some(m) => (m * 10.0).round() / 10.0,
+        None => output.overall_score,
     };
     let needs_fix = (output.summary.overall_score - output.overall_score).abs()
         > MEAN_DRIFT_TOLERANCE
@@ -172,7 +156,7 @@ pub fn render_report(output: &ReviewOutput, template_dir: &Path) -> Result<Strin
 // ---------------------------------------------------------------------------
 
 /// Build an `AgentRunner` from the resolved config and review input.
-pub(crate) fn build_agent_runner(config: &DkConfig, input: &ReviewInput) -> AgentRunner {
+pub fn build_agent_runner(config: &DkConfig, input: &ReviewInput) -> AgentRunner {
     let mut runner = AgentRunner::new()
         .agent(&config.agent.agent)
         .working_dir(input.working_dir.as_str());
@@ -229,6 +213,7 @@ fn read_template(path: &Path) -> Result<String, ReviewError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::ReviewOptions;
 
     #[test]
     fn working_dir_invalid_code() {
@@ -241,7 +226,8 @@ mod tests {
             options: ReviewOptions::default(),
         };
         let cfg = crate::config::default_config();
-        let err = run_review(input, &cfg, Path::new("/tmp"), &|_| {}).unwrap_err();
+        let (runner, _) = AgentRunner::with_mock(vec![]);
+        let err = run_review(input, &cfg, Path::new("/tmp"), runner, &|_| {}).unwrap_err();
         assert_eq!(err.code(), "DK_WORKING_DIR_INVALID");
     }
 
