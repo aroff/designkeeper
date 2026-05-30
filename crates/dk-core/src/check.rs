@@ -5,7 +5,7 @@ use std::path::Path;
 use aikit_sdk::AgentRunner;
 
 use crate::config::DkConfig;
-use crate::review::{self, build_agent_runner, ProgressFn};
+use crate::review::{self, ProgressFn};
 use crate::types::{ReviewInput, ReviewOutput, Severity};
 
 /// Result of a `dk check` run.
@@ -24,20 +24,18 @@ pub struct CheckResult {
     pub fail_code: Option<&'static str>,
 }
 
-/// Run `check` using the real agent from `config`.
-pub fn run_check(
-    input: ReviewInput,
-    config: &DkConfig,
-    template_dir: &Path,
-    verbose: bool,
-    progress: &ProgressFn,
-) -> CheckResult {
-    let runner = build_agent_runner(config, &input);
-    run_check_with_runner(input, config, template_dir, verbose, runner, progress)
+impl CheckResult {
+    pub fn exit_code(&self) -> i32 {
+        match self.fail_code {
+            None => 0,
+            Some("DK_CHECK_FAILED") => 1,
+            Some(_) => 2,
+        }
+    }
 }
 
-/// Run `check` against an injected `AgentRunner` (used by tests).
-pub fn run_check_with_runner(
+/// Run `check` against an injected `AgentRunner`.
+pub fn run_check(
     input: ReviewInput,
     config: &DkConfig,
     template_dir: &Path,
@@ -45,7 +43,7 @@ pub fn run_check_with_runner(
     runner: AgentRunner,
     progress: &ProgressFn,
 ) -> CheckResult {
-    match review::run_review_with_runner(input, config, template_dir, runner, progress) {
+    match review::run_review(input, config, template_dir, runner, progress) {
         Ok(output) => {
             let passed = output.summary.verdict.is_pass();
             let report = if verbose {
@@ -81,14 +79,8 @@ fn findings_summary(output: &ReviewOutput) -> String {
         output.summary.verdict.as_key(),
         output.summary.overall_score
     )];
-    let order = [
-        Severity::Blocker,
-        Severity::Major,
-        Severity::Minor,
-        Severity::Nit,
-    ];
-    for sev in order {
-        let group: Vec<&crate::review::Finding> = output
+    for &sev in Severity::all() {
+        let group: Vec<&crate::types::Finding> = output
             .findings
             .iter()
             .filter(|f| f.severity == sev)
@@ -142,7 +134,7 @@ mod tests {
         let (pack_dir, wd) = setup();
         let raw = fixture("approve.json");
         let (runner, _) = AgentRunner::with_mock(vec![Ok(format!("```json\n{raw}\n```"))]);
-        let res = run_check_with_runner(
+        let res = run_check(
             input_for(wd.path()),
             &default_config(),
             pack_dir.path(),
@@ -159,7 +151,7 @@ mod tests {
         let (pack_dir, wd) = setup();
         let raw = fixture("request-changes.json");
         let (runner, _) = AgentRunner::with_mock(vec![Ok(format!("```json\n{raw}\n```"))]);
-        let res = run_check_with_runner(
+        let res = run_check(
             input_for(wd.path()),
             &default_config(),
             pack_dir.path(),
@@ -180,7 +172,7 @@ mod tests {
         let (pack_dir, wd) = setup();
         let raw = fixture("approve.json");
         let (runner, _) = AgentRunner::with_mock(vec![Ok(format!("```json\n{raw}\n```"))]);
-        let res = run_check_with_runner(
+        let res = run_check(
             input_for(wd.path()),
             &default_config(),
             pack_dir.path(),

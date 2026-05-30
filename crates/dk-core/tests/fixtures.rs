@@ -157,7 +157,7 @@ fn end_to_end_run_review_with_recorded_response() {
     let (pack_dir, wd) = pack_and_workdir();
     let raw = read_fixture("examples/agent-response/valid.md");
     let (runner, _) = AgentRunner::with_mock(vec![Ok(raw)]);
-    let output = review::run_review_with_runner(
+    let output = review::run_review(
         input_for(wd.path()),
         &default_config(),
         pack_dir.path(),
@@ -181,7 +181,7 @@ fn run_review_reconciles_score_mismatch() {
     value["overall_score"] = serde_json::json!(2.0);
     let raw = format!("```json\n{value}\n```");
     let (runner, _) = AgentRunner::with_mock(vec![Ok(raw)]);
-    let output = review::run_review_with_runner(
+    let output = review::run_review(
         input_for(wd.path()),
         &default_config(),
         pack_dir.path(),
@@ -211,7 +211,7 @@ fn run_review_template_not_found() {
     let empty = tempfile::tempdir().unwrap();
     let wd = tempfile::tempdir().unwrap();
     let (runner, _) = AgentRunner::with_mock(vec![]);
-    let err = review::run_review_with_runner(
+    let err = review::run_review(
         input_for(wd.path()),
         &default_config(),
         empty.path(),

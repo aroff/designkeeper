@@ -274,11 +274,16 @@ fn common_args() -> Vec<ArgSpec> {
 // Command handlers
 // ---------------------------------------------------------------------------
 
+fn print_installed(p: &dk_core::InstalledPack) {
+    println!("✓ installed {} → {}", p.name, p.path.display());
+}
+
 fn run_review_cmd(args: CommandArgs) -> anyhow::Result<()> {
     let c = resolve_common_args(&args);
 
     let reporter = ProgressReporter::new(&c.config.agent.agent);
-    let result = review::run_review(c.input, &c.config, &c.template_dir, &|e| reporter.handle(e));
+    let runner = review::build_agent_runner(&c.config, &c.input);
+    let result = review::run_review(c.input, &c.config, &c.template_dir, runner, &|e| reporter.handle(e));
     reporter.finish();
     let output = match result {
         Ok(o) => o,
@@ -306,7 +311,8 @@ fn run_check_cmd(args: CommandArgs) -> anyhow::Result<()> {
     let verbose = flag(&args, "verbose");
 
     let reporter = ProgressReporter::new(&c.config.agent.agent);
-    let result = run_check(c.input, &c.config, &c.template_dir, verbose, &|e| {
+    let runner = review::build_agent_runner(&c.config, &c.input);
+    let result = run_check(c.input, &c.config, &c.template_dir, verbose, runner, &|e| {
         reporter.handle(e)
     });
     reporter.finish();
@@ -318,11 +324,7 @@ fn run_check_cmd(args: CommandArgs) -> anyhow::Result<()> {
     if let Some(summary) = &result.findings_summary {
         eprintln!("{summary}");
     }
-    match result.fail_code {
-        None => std::process::exit(0),
-        Some("DK_CHECK_FAILED") => std::process::exit(1),
-        Some(_) => std::process::exit(2),
-    }
+    std::process::exit(result.exit_code());
 }
 
 fn run_init_cmd(args: CommandArgs) -> anyhow::Result<()> {
@@ -350,7 +352,7 @@ fn run_init_cmd(args: CommandArgs) -> anyhow::Result<()> {
         println!("No packs installed (check dk-templates.toml sources).");
     } else {
         for p in &outcome.installed_packs {
-            println!("✓ installed {} → {}", p.name, p.path.display());
+            print_installed(p);
         }
     }
     Ok(())
@@ -370,7 +372,7 @@ fn run_install_cmd(args: CommandArgs) -> anyhow::Result<()> {
 
     if let Some(source) = args.named.get("source") {
         match pack_store::install_pack(source, &dest_base, scope) {
-            Ok(p) => println!("✓ installed {} → {}", p.name, p.path.display()),
+            Ok(p) => print_installed(&p),
             Err(e) => fail(e.code(), &e.to_string()),
         }
     } else {
@@ -379,7 +381,7 @@ fn run_install_cmd(args: CommandArgs) -> anyhow::Result<()> {
         for entry in &manifest.packs {
             match pack_store::install_pack_or_embedded_fallback(entry, &dest_base, scope.clone()) {
                 Ok(Some(p)) => {
-                    println!("✓ installed {} → {}", p.name, p.path.display());
+                    print_installed(&p);
                     any = true;
                 }
                 Ok(None) => {

@@ -4,14 +4,14 @@
 //! configuration file, template-pack status, which agent CLIs are installed,
 //! and whether the configured agent is reachable on `PATH`.
 
-use std::path::PathBuf;
-
 use aikit_sdk::agent_runner::AgentDetector;
 use cli_framework::doctor::{CheckSeverity, DoctorCheck, DoctorFinding, DoctorFuture};
 use cli_framework::prelude::AppContext;
 
 use dk_core::config::{find_up, resolve_config};
 use dk_core::pack_store;
+
+use crate::input::current_dir;
 
 /// All `dk` doctor checks, ready to hand to `DoctorModule::new`.
 pub fn checks() -> Vec<std::sync::Arc<dyn DoctorCheck>> {
@@ -41,10 +41,6 @@ fn finding(
     }
 }
 
-fn cwd() -> PathBuf {
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-}
-
 // ---------------------------------------------------------------------------
 
 struct ConfigCheck;
@@ -59,8 +55,14 @@ impl DoctorCheck for ConfigCheck {
         Some("Resolves dk.toml (walking up) and reports the effective values")
     }
     fn run(&self, _ctx: &dyn AppContext) -> DoctorFuture {
-        Box::pin(async {
-            let dir = cwd();
+        let id = self.id();
+        let title = self.title();
+        Box::pin(async move {
+            let dir = current_dir();
+            let config_path = find_up(&dir, |d| {
+                let p = d.join("dk.toml");
+                if p.is_file() { Some(p) } else { None }
+            });
             match resolve_config(&dir) {
                 Ok(cfg) => {
                     let model = cfg.agent.model.as_deref().unwrap_or("(default)");
@@ -68,31 +70,18 @@ impl DoctorCheck for ConfigCheck {
                         "agent = {}\nmodel = {}\noutput = {:?}",
                         cfg.agent.agent, model, cfg.output.format
                     );
-                    match find_up(&dir, |d| {
-                        let p = d.join("dk.toml");
-                        if p.is_file() { Some(p) } else { None }
-                    }) {
-                        Some(path) => finding(
-                            "config",
-                            "Effective configuration",
-                            CheckSeverity::Ok,
-                            format!("Using {}", path.display()),
-                            Some(detail),
-                            None,
-                        ),
-                        None => finding(
-                            "config",
-                            "Effective configuration",
-                            CheckSeverity::Ok,
+                    let (message, remediation) = match &config_path {
+                        Some(path) => (format!("Using {}", path.display()), None),
+                        None => (
                             "No dk.toml found; using built-in defaults".to_string(),
-                            Some(detail),
                             Some("Run `dk init` to create a dk.toml.".to_string()),
                         ),
-                    }
+                    };
+                    finding(id, title, CheckSeverity::Ok, message, Some(detail), remediation)
                 }
                 Err(e) => finding(
-                    "config",
-                    "Effective configuration",
+                    id,
+                    title,
                     CheckSeverity::Error,
                     format!("dk.toml is invalid: {e}"),
                     None,
@@ -117,13 +106,15 @@ impl DoctorCheck for InstalledPacksCheck {
         Some("Lists installed template packs (project-local and global)")
     }
     fn run(&self, _ctx: &dyn AppContext) -> DoctorFuture {
-        Box::pin(async {
-            let dir = cwd();
+        let id = self.id();
+        let title = self.title();
+        Box::pin(async move {
+            let dir = current_dir();
             let packs = pack_store::list_packs(&dir);
             if packs.is_empty() {
                 finding(
-                    "installed-packs",
-                    "Installed template packs",
+                    id,
+                    title,
                     CheckSeverity::Warning,
                     "No template packs installed. Built-in fallbacks (default, structural) are available.".to_string(),
                     None,
@@ -136,8 +127,8 @@ impl DoctorCheck for InstalledPacksCheck {
                     .collect::<Vec<_>>()
                     .join("\n");
                 finding(
-                    "installed-packs",
-                    "Installed template packs",
+                    id,
+                    title,
                     CheckSeverity::Ok,
                     format!("{} pack(s) installed", packs.len()),
                     Some(detail),
@@ -162,7 +153,9 @@ impl DoctorCheck for InstalledAgentsCheck {
         Some("Detects which agent CLIs are installed via AgentDetector")
     }
     fn run(&self, _ctx: &dyn AppContext) -> DoctorFuture {
-        Box::pin(async {
+        let id = self.id();
+        let title = self.title();
+        Box::pin(async move {
             let infos = AgentDetector::detect();
             let found: Vec<String> = infos
                 .iter()
@@ -172,8 +165,8 @@ impl DoctorCheck for InstalledAgentsCheck {
             if found.is_empty() {
                 let all_keys: Vec<String> = infos.iter().map(|i| i.key.clone()).collect();
                 finding(
-                    "installed-agents",
-                    "Installed agents",
+                    id,
+                    title,
                     CheckSeverity::Warning,
                     "No known agent CLIs found on PATH".to_string(),
                     Some(format!("Looked for: {}", all_keys.join(", "))),
@@ -181,8 +174,8 @@ impl DoctorCheck for InstalledAgentsCheck {
                 )
             } else {
                 finding(
-                    "installed-agents",
-                    "Installed agents",
+                    id,
+                    title,
                     CheckSeverity::Ok,
                     format!("Detected: {}", found.join(", ")),
                     None,
@@ -207,14 +200,16 @@ impl DoctorCheck for AgentReachabilityCheck {
         Some("Verifies the configured agent's CLI is on PATH")
     }
     fn run(&self, _ctx: &dyn AppContext) -> DoctorFuture {
-        Box::pin(async {
-            let dir = cwd();
+        let id = self.id();
+        let title = self.title();
+        Box::pin(async move {
+            let dir = current_dir();
             let cfg = match resolve_config(&dir) {
                 Ok(c) => c,
                 Err(_) => {
                     return finding(
-                        "agent-reachability",
-                        "Configured agent reachability",
+                        id,
+                        title,
                         CheckSeverity::Skipped,
                         "Skipped: dk.toml could not be parsed".to_string(),
                         None,
@@ -231,8 +226,8 @@ impl DoctorCheck for AgentReachabilityCheck {
 
             if installed {
                 finding(
-                    "agent-reachability",
-                    "Configured agent reachability",
+                    id,
+                    title,
                     CheckSeverity::Ok,
                     format!("Agent '{key}' is installed and reachable"),
                     None,
@@ -241,8 +236,8 @@ impl DoctorCheck for AgentReachabilityCheck {
             } else {
                 let detail = reason.map(|r| format!("Reason: {r}"));
                 finding(
-                    "agent-reachability",
-                    "Configured agent reachability",
+                    id,
+                    title,
                     CheckSeverity::Error,
                     format!("Configured agent '{key}' not found on PATH"),
                     detail,

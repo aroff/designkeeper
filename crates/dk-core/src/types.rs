@@ -11,6 +11,13 @@ fn parse_enum_from_str<T: serde::de::DeserializeOwned>(s: &str) -> Option<T> {
     serde_json::from_value(serde_json::Value::String(s.trim().to_ascii_lowercase())).ok()
 }
 
+fn serde_key<T: serde::Serialize>(v: &T) -> String {
+    serde_json::to_value(v)
+        .ok()
+        .and_then(|val| val.as_str().map(String::from))
+        .unwrap_or_default()
+}
+
 // ---------------------------------------------------------------------------
 // Input types (mirror schemas/input.schema.json)
 // ---------------------------------------------------------------------------
@@ -48,11 +55,7 @@ pub struct ChangeContext {
 
 impl ChangeContext {
     pub fn is_empty(&self) -> bool {
-        self.title.is_none()
-            && self.description.is_none()
-            && self.base_ref.is_none()
-            && self.head_ref.is_none()
-            && self.diff_stat.is_none()
+        *self == Self::default()
     }
 }
 
@@ -70,18 +73,7 @@ pub enum FocusArea {
 }
 
 impl FocusArea {
-    pub fn as_key(&self) -> &'static str {
-        match self {
-            FocusArea::Security => "security",
-            FocusArea::Concurrency => "concurrency",
-            FocusArea::Accessibility => "accessibility",
-            FocusArea::Internationalization => "internationalization",
-            FocusArea::Privacy => "privacy",
-            FocusArea::Performance => "performance",
-            FocusArea::ApiDesign => "api_design",
-            FocusArea::Ui => "ui",
-        }
-    }
+    pub fn as_key(&self) -> String { serde_key(self) }
 
     pub fn parse(s: &str) -> Option<Self> { parse_enum_from_str(s) }
 }
@@ -99,11 +91,11 @@ pub struct ProjectHints {
 
 impl ProjectHints {
     pub fn is_empty(&self) -> bool {
-        self.style_guide.is_none()
-            && self.contributing.is_none()
-            && self.architecture_docs.as_ref().is_none_or(|d| d.is_empty())
+        *self == Self::default()
     }
 }
+
+pub const DEFAULT_MAX_FINDINGS: u8 = 25;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -116,7 +108,7 @@ pub struct ReviewOptions {
 impl Default for ReviewOptions {
     fn default() -> Self {
         Self {
-            max_findings: 25,
+            max_findings: DEFAULT_MAX_FINDINGS,
             include_dimensions: None,
         }
     }
@@ -145,23 +137,7 @@ pub enum Dimension {
 }
 
 impl Dimension {
-    pub fn as_key(&self) -> &'static str {
-        match self {
-            Dimension::OverallCodeHealth => "overall_code_health",
-            Dimension::ClDescription => "cl_description",
-            Dimension::ChangeScope => "change_scope",
-            Dimension::Design => "design",
-            Dimension::Functionality => "functionality",
-            Dimension::Complexity => "complexity",
-            Dimension::Tests => "tests",
-            Dimension::Naming => "naming",
-            Dimension::Comments => "comments",
-            Dimension::Style => "style",
-            Dimension::Consistency => "consistency",
-            Dimension::Documentation => "documentation",
-            Dimension::ContextAndReviewDepth => "context_and_review_depth",
-        }
-    }
+    pub fn as_key(&self) -> String { serde_key(self) }
 
     pub fn parse(s: &str) -> Option<Self> { parse_enum_from_str(s) }
 }
@@ -178,13 +154,10 @@ pub enum Severity {
 }
 
 impl Severity {
-    pub fn as_key(&self) -> &'static str {
-        match self {
-            Severity::Blocker => "blocker",
-            Severity::Major => "major",
-            Severity::Minor => "minor",
-            Severity::Nit => "nit",
-        }
+    pub fn as_key(&self) -> String { serde_key(self) }
+
+    pub fn all() -> &'static [Severity] {
+        &[Severity::Blocker, Severity::Major, Severity::Minor, Severity::Nit]
     }
 }
 
@@ -198,14 +171,7 @@ pub enum Verdict {
 }
 
 impl Verdict {
-    pub fn as_key(&self) -> &'static str {
-        match self {
-            Verdict::Approve => "approve",
-            Verdict::ApproveWithComments => "approve_with_comments",
-            Verdict::RequestChanges => "request_changes",
-            Verdict::Reject => "reject",
-        }
-    }
+    pub fn as_key(&self) -> String { serde_key(self) }
 
     pub fn is_pass(&self) -> bool {
         matches!(self, Verdict::Approve | Verdict::ApproveWithComments)
@@ -228,6 +194,18 @@ pub struct ReviewOutput {
     pub suggested_next_steps: Vec<String>,
 }
 
+impl ReviewOutput {
+    /// Returns the unrounded mean of all scored grade entries, or `None` if no grades are scored.
+    pub fn mean_grade_score(&self) -> Option<f64> {
+        let scores: Vec<f64> = self.grades.values().filter_map(|g| g.score()).collect();
+        if scores.is_empty() {
+            None
+        } else {
+            Some(scores.iter().sum::<f64>() / scores.len() as f64)
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Summary {
@@ -237,30 +215,38 @@ pub struct Summary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ScoredGrade {
+    pub score: f64,
+    pub rationale: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct NotEvaluatedGrade {
+    pub not_evaluated: bool,
+    pub rationale: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum GradeEntry {
-    Scored {
-        score: f64,
-        rationale: String,
-    },
-    NotEvaluated {
-        not_evaluated: bool,
-        rationale: String,
-    },
+    Scored(ScoredGrade),
+    NotEvaluated(NotEvaluatedGrade),
 }
 
 impl GradeEntry {
     pub fn score(&self) -> Option<f64> {
         match self {
-            GradeEntry::Scored { score, .. } => Some(*score),
-            GradeEntry::NotEvaluated { .. } => None,
+            GradeEntry::Scored(g) => Some(g.score),
+            GradeEntry::NotEvaluated(_) => None,
         }
     }
 
     pub fn rationale(&self) -> &str {
         match self {
-            GradeEntry::Scored { rationale, .. } => rationale,
-            GradeEntry::NotEvaluated { rationale, .. } => rationale,
+            GradeEntry::Scored(g) => &g.rationale,
+            GradeEntry::NotEvaluated(g) => &g.rationale,
         }
     }
 }
@@ -326,6 +312,13 @@ mod tests {
     }
 
     #[test]
+    fn grade_entry_rejects_ambiguous_scored_and_not_evaluated() {
+        let ambiguous = r#"{"score":7,"not_evaluated":true,"rationale":"x"}"#;
+        let result: Result<GradeEntry, _> = serde_json::from_str(ambiguous);
+        assert!(result.is_err(), "should reject JSON with both score and not_evaluated fields");
+    }
+
+    #[test]
     fn focus_area_parse_round_trips_all_variants() {
         let variants = [
             FocusArea::Security,
@@ -338,7 +331,7 @@ mod tests {
             FocusArea::Ui,
         ];
         for v in variants {
-            assert_eq!(FocusArea::parse(v.as_key()), Some(v), "round-trip failed for {:?}", v);
+            assert_eq!(FocusArea::parse(&v.as_key()), Some(v), "round-trip failed for {:?}", v);
         }
     }
 
@@ -360,7 +353,43 @@ mod tests {
             Dimension::ContextAndReviewDepth,
         ];
         for v in variants {
-            assert_eq!(Dimension::parse(v.as_key()), Some(v), "round-trip failed for {:?}", v);
+            assert_eq!(Dimension::parse(&v.as_key()), Some(v), "round-trip failed for {:?}", v);
+        }
+    }
+
+    #[test]
+    fn severity_as_key_matches_serde() {
+        let cases = [
+            (Severity::Blocker, "blocker"),
+            (Severity::Major, "major"),
+            (Severity::Minor, "minor"),
+            (Severity::Nit, "nit"),
+        ];
+        for (variant, expected) in cases {
+            assert_eq!(variant.as_key(), expected);
+            assert_eq!(
+                serde_json::to_value(variant).unwrap(),
+                Value::String(expected.into()),
+                "serde/as_key mismatch for {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn verdict_as_key_matches_serde() {
+        let cases = [
+            (Verdict::Approve, "approve"),
+            (Verdict::ApproveWithComments, "approve_with_comments"),
+            (Verdict::RequestChanges, "request_changes"),
+            (Verdict::Reject, "reject"),
+        ];
+        for (variant, expected) in cases {
+            assert_eq!(variant.as_key(), expected);
+            assert_eq!(
+                serde_json::to_value(variant).unwrap(),
+                Value::String(expected.into()),
+                "serde/as_key mismatch for {expected}"
+            );
         }
     }
 }
