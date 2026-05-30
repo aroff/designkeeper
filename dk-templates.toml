@@ -1,0 +1,9 @@
+[[packs]]
+name = "default"
+description = "Google engineering practices code review rubric"
+source = "TODO/dk-template-default"
+
+[[packs]]
+name = "structural"
+description = "Structural code quality review — Structure, Complexity, Expressiveness"
+source = "TODO/dk-template-structural"

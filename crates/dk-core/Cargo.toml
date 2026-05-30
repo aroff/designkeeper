@@ -20,7 +20,9 @@ tracing.workspace = true
 thiserror.workspace = true
 aikit-sdk.workspace = true
 
-[dev-dependencies]
+dirs.workspace = true
 tempfile = "3"
+
+[dev-dependencies]
 serde_json.workspace = true
 jsonschema.workspace = true

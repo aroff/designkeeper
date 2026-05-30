@@ -22,16 +22,30 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 /// Default prompt template (`templates/review.md`).
-pub const PROMPT_TEMPLATE: &str = include_str!("../../../templates/default/templates/prompt.md");
+pub const PROMPT_TEMPLATE: &str = include_str!("../../../templates/default/templates/review.md");
 /// Default rubric (`templates/methodology.md`).
 pub const METHODOLOGY: &str = include_str!("../../../templates/default/templates/methodology.md");
 /// Default report layout (`reports/review.md`).
-pub const REPORT_TEMPLATE: &str = include_str!("../../../templates/default/templates/report.md");
+pub const REPORT_TEMPLATE: &str = include_str!("../../../templates/default/reports/review.md");
 /// Input schema (`schemas/review-input.json`).
-pub const INPUT_SCHEMA: &str = include_str!("../../../templates/default/schemas/input.schema.json");
+pub const INPUT_SCHEMA: &str = include_str!("../../../templates/default/schemas/review-input.json");
 /// Output schema (`schemas/review.json`).
-pub const OUTPUT_SCHEMA: &str =
-    include_str!("../../../templates/default/schemas/output.schema.json");
+pub const OUTPUT_SCHEMA: &str = include_str!("../../../templates/default/schemas/review.json");
+
+/// Embedded pack manifest for structural template.
+pub const STRUCTURAL_PROMPT_TEMPLATE: &str =
+    include_str!("../../../templates/structural/templates/review.md");
+pub const STRUCTURAL_METHODOLOGY: &str =
+    include_str!("../../../templates/structural/templates/methodology.md");
+pub const STRUCTURAL_REPORT_TEMPLATE: &str =
+    include_str!("../../../templates/structural/reports/review.md");
+pub const STRUCTURAL_INPUT_SCHEMA: &str =
+    include_str!("../../../templates/structural/schemas/review-input.json");
+pub const STRUCTURAL_OUTPUT_SCHEMA: &str =
+    include_str!("../../../templates/structural/schemas/review.json");
+
+/// Official pack manifest (embedded from repo root `dk-templates.toml`).
+pub const DK_TEMPLATES_MANIFEST: &str = include_str!("../../../dk-templates.toml");
 
 pub fn prompt_path(dir: &Path) -> PathBuf {
     dir.join("templates").join("review.md")
@@ -53,16 +67,32 @@ pub fn output_schema_path(dir: &Path) -> PathBuf {
     dir.join("schemas").join("review.json")
 }
 
-/// Write the embedded default template pack under `dir`, creating subdirs.
-pub fn write_default_pack(dir: &Path) -> io::Result<()> {
+fn create_pack_dirs(dir: &Path) -> io::Result<()> {
     std::fs::create_dir_all(dir.join("templates"))?;
     std::fs::create_dir_all(dir.join("schemas"))?;
     std::fs::create_dir_all(dir.join("reports"))?;
+    Ok(())
+}
+
+/// Write the embedded default template pack under `dir`, creating subdirs.
+pub fn write_default_pack(dir: &Path) -> io::Result<()> {
+    create_pack_dirs(dir)?;
     std::fs::write(prompt_path(dir), PROMPT_TEMPLATE)?;
     std::fs::write(methodology_path(dir), METHODOLOGY)?;
     std::fs::write(report_path(dir), REPORT_TEMPLATE)?;
     std::fs::write(input_schema_path(dir), INPUT_SCHEMA)?;
     std::fs::write(output_schema_path(dir), OUTPUT_SCHEMA)?;
+    Ok(())
+}
+
+/// Write the embedded structural template pack under `dir`, creating subdirs.
+pub fn write_structural_pack(dir: &Path) -> io::Result<()> {
+    create_pack_dirs(dir)?;
+    std::fs::write(prompt_path(dir), STRUCTURAL_PROMPT_TEMPLATE)?;
+    std::fs::write(methodology_path(dir), STRUCTURAL_METHODOLOGY)?;
+    std::fs::write(report_path(dir), STRUCTURAL_REPORT_TEMPLATE)?;
+    std::fs::write(input_schema_path(dir), STRUCTURAL_INPUT_SCHEMA)?;
+    std::fs::write(output_schema_path(dir), STRUCTURAL_OUTPUT_SCHEMA)?;
     Ok(())
 }
 

@@ -1,0 +1,5 @@
+[package]
+name = "default"
+version = "1.0.0"
+description = "Google engineering practices code review rubric"
+authors = ["DesignKeeper"]

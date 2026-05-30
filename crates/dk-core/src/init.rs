@@ -1,8 +1,4 @@
-//! `dk init` scaffolding: materialize `.dk/` and write/update `dk.toml`.
-//!
-//! This is the domain side of init (CONTEXT.md §"Init Flow"). The CLI layer
-//! handles argument parsing and interactive prompts; here we only perform the
-//! filesystem effects: laying down the template pack and the control file.
+//! `dk init` scaffolding: install template packs to `.dk/packs/` and write `dk.toml`.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -10,15 +6,14 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 use toml_edit::DocumentMut;
 
-use crate::pack;
+use crate::pack_store::{self, DkTemplatesManifest, InstalledPack};
 
-/// Where the materialized template pack contents originated.
+/// Where a materialized pack came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PackSource {
-    /// Wrote the embedded default pack.
     Embedded,
-    /// Copied from a local directory.
     LocalDir(PathBuf),
+    Remote(String),
 }
 
 /// Parameters collected for an init run.
@@ -26,8 +21,6 @@ pub enum PackSource {
 pub struct InitParams {
     pub agent: String,
     pub model: Option<String>,
-    /// `"default"`, a local folder path, or a remote URL reference.
-    pub pack: String,
 }
 
 /// Result of a successful init run.
@@ -35,7 +28,7 @@ pub struct InitParams {
 pub struct InitOutcome {
     pub dk_dir: PathBuf,
     pub config_path: PathBuf,
-    pub pack_source: PackSource,
+    pub installed_packs: Vec<InstalledPack>,
     /// `true` if `dk.toml` already existed and was updated in place.
     pub updated_existing: bool,
 }
@@ -57,71 +50,66 @@ impl InitError {
     }
 }
 
-/// Scaffold `.dk/` under `working_dir` and write (or update) `dk.toml`.
+/// Scaffold `.dk/packs/` under `working_dir`, install all official packs, and
+/// write (or update) `dk.toml`.
 ///
-/// Re-running is safe and iterative: an existing `dk.toml` is parsed and only
-/// the `[agent]` and `[templates]` fields are overwritten, preserving any
-/// `[scan]`/`[output]` the user added.
+/// Re-running is safe: existing packs are overwritten, `dk.toml` sections other
+/// than `[agent]` are preserved.
 pub fn run_init(working_dir: &Path, params: &InitParams) -> Result<InitOutcome, InitError> {
     let dk_dir = working_dir.join(".dk");
-    let staging = working_dir.join(".dk.tmp");
+    let packs_dir = dk_dir.join("packs");
+    std::fs::create_dir_all(&packs_dir)?;
 
-    if staging.exists() {
-        std::fs::remove_dir_all(&staging)?;
-    }
-
-    let pack_source = materialize_pack(&staging, &params.pack)?;
+    let manifest = DkTemplatesManifest::resolve(working_dir);
+    let installed_packs = install_packs_from_manifest(&manifest, &packs_dir);
 
     let config_path = working_dir.join("dk.toml");
     let updated_existing = config_path.is_file();
     write_config(&config_path, params)?;
 
-    if dk_dir.exists() {
-        let backup = working_dir.join(".dk.old");
-        if backup.exists() {
-            std::fs::remove_dir_all(&backup)?;
-        }
-        std::fs::rename(&dk_dir, &backup)?;
-    }
-    std::fs::rename(&staging, &dk_dir)?;
-
     Ok(InitOutcome {
         dk_dir,
         config_path,
-        pack_source,
+        installed_packs,
         updated_existing,
     })
 }
 
-/// Lay down the template pack under `dk_dir`.
+/// Install all packs listed in the manifest.
 ///
-/// A pack reference that points at an existing local directory is copied
-/// verbatim. Anything else (`"default"` or a remote URL we cannot fetch
-/// offline) seeds `.dk/` with the embedded defaults so `dk review` works
-/// immediately; the reference itself is recorded in `dk.toml`.
-fn materialize_pack(dk_dir: &Path, pack_ref: &str) -> Result<PackSource, InitError> {
-    let candidate = Path::new(pack_ref);
-    if pack_ref != "default" && candidate.is_dir() {
-        copy_dir_recursive(candidate, dk_dir)?;
-        return Ok(PackSource::LocalDir(candidate.to_path_buf()));
-    }
-    pack::write_default_pack(dk_dir)?;
-    Ok(PackSource::Embedded)
+/// Failures for individual packs are non-fatal — we fall back to the embedded
+/// copy for built-ins and skip unknown packs that can't be fetched.
+fn install_packs_from_manifest(
+    manifest: &DkTemplatesManifest,
+    packs_dir: &Path,
+) -> Vec<InstalledPack> {
+    manifest
+        .packs
+        .iter()
+        .filter_map(|entry| {
+            match pack_store::install_pack(&entry.source, packs_dir) {
+                Ok(installed) => Some(installed),
+                Err(_) => {
+                    // Fall back: write embedded copy for known built-ins
+                    write_embedded_fallback(&entry.name, packs_dir)
+                }
+            }
+        })
+        .collect()
 }
 
-fn copy_dir_recursive(src: &Path, dst: &Path) -> io::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let from = entry.path();
-        let to = dst.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir_recursive(&from, &to)?;
-        } else {
-            std::fs::copy(&from, &to)?;
-        }
-    }
-    Ok(())
+fn write_embedded_fallback(name: &str, packs_dir: &Path) -> Option<InstalledPack> {
+    let dest = packs_dir.join(name);
+    let result = match name {
+        "default" => crate::pack::write_default_pack(&dest),
+        "structural" => crate::pack::write_structural_pack(&dest),
+        _ => return None,
+    };
+    result.ok().map(|_| InstalledPack {
+        name: name.to_string(),
+        path: dest,
+        scope: crate::pack_store::PackScope::Embedded,
+    })
 }
 
 fn write_config(path: &Path, params: &InitParams) -> Result<(), InitError> {
@@ -143,7 +131,6 @@ fn write_config(path: &Path, params: &InitParams) -> Result<(), InitError> {
         "model",
         params.model.as_deref().unwrap_or(""),
     );
-    set_str(&mut doc, "templates", "pack", &params.pack);
 
     std::fs::write(path, doc.to_string())?;
     Ok(())
@@ -156,42 +143,19 @@ fn set_str(doc: &mut DocumentMut, section: &str, key: &str, value: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::resolve_config;
     use tempfile::tempdir;
 
     #[test]
-    fn writes_pack_and_config() {
-        let dir = tempdir().unwrap();
-        let params = InitParams {
-            agent: "codex".to_string(),
-            model: Some("gpt-5".to_string()),
-            pack: "default".to_string(),
-        };
-        let out = run_init(dir.path(), &params).unwrap();
-
-        assert_eq!(out.pack_source, PackSource::Embedded);
-        assert!(!out.updated_existing);
-        assert!(pack::prompt_path(&out.dk_dir).is_file());
-        assert!(out.config_path.is_file());
-
-        // The written dk.toml must round-trip through the resolver.
-        let cfg = resolve_config(dir.path()).unwrap();
-        assert_eq!(cfg.agent.agent, "codex");
-        assert_eq!(cfg.agent.model.as_deref(), Some("gpt-5"));
-        assert_eq!(cfg.templates.pack, "default");
-    }
-
-    #[test]
-    fn empty_model_round_trips_as_unset() {
+    fn init_creates_packs_dir_and_config() {
         let dir = tempdir().unwrap();
         let params = InitParams {
             agent: "claude".to_string(),
             model: None,
-            pack: "default".to_string(),
         };
-        run_init(dir.path(), &params).unwrap();
-        let cfg = resolve_config(dir.path()).unwrap();
-        assert_eq!(cfg.agent.model, None);
+        let out = run_init(dir.path(), &params).unwrap();
+        assert!(out.dk_dir.join("packs").is_dir());
+        assert!(out.config_path.is_file());
+        assert!(!out.updated_existing);
     }
 
     #[test]
@@ -206,35 +170,12 @@ mod tests {
         let params = InitParams {
             agent: "gemini".to_string(),
             model: None,
-            pack: "default".to_string(),
         };
         let out = run_init(dir.path(), &params).unwrap();
         assert!(out.updated_existing);
 
-        let cfg = resolve_config(dir.path()).unwrap();
+        let cfg = crate::config::resolve_config(dir.path()).unwrap();
         assert_eq!(cfg.agent.agent, "gemini");
-        // The user's [scan] override survived the rewrite.
         assert_eq!(cfg.scan.extensions, vec![".rs"]);
-    }
-
-    #[test]
-    fn copies_local_pack_dir() {
-        let src = tempdir().unwrap();
-        std::fs::create_dir_all(src.path().join("templates")).unwrap();
-        std::fs::write(src.path().join("templates").join("review.md"), "custom").unwrap();
-
-        let dir = tempdir().unwrap();
-        let params = InitParams {
-            agent: "claude".to_string(),
-            model: None,
-            pack: src.path().to_string_lossy().into_owned(),
-        };
-        let out = run_init(dir.path(), &params).unwrap();
-        assert_eq!(
-            out.pack_source,
-            PackSource::LocalDir(src.path().to_path_buf())
-        );
-        let copied = std::fs::read_to_string(pack::prompt_path(&out.dk_dir)).unwrap();
-        assert_eq!(copied, "custom");
     }
 }

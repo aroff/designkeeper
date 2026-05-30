@@ -830,6 +830,7 @@ dependencies = [
  "aikit-sdk",
  "anyhow",
  "cli-framework",
+ "dirs 5.0.1",
  "dk-core",
  "openssl",
  "serde_json",
@@ -844,6 +845,7 @@ name = "dk-core"
 version = "0.1.7"
 dependencies = [
  "aikit-sdk",
+ "dirs 5.0.1",
  "globset",
  "ignore",
  "jsonschema",
