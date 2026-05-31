@@ -60,7 +60,11 @@ pub fn run_check(
                 passed,
                 report,
                 findings_summary,
-                fail_code: if passed { None } else { Some("DK_CHECK_FAILED") },
+                fail_code: if passed {
+                    None
+                } else {
+                    Some("DK_CHECK_FAILED")
+                },
             }
         }
         Err(err) => CheckResult {

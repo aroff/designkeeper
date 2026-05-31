@@ -20,6 +20,8 @@ globset.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 aikit-sdk.workspace = true
+serde-sarif.workspace = true
+sha2.workspace = true
 
 dirs.workspace = true
 tempfile = "3"

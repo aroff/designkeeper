@@ -37,5 +37,5 @@ We chose repo-subdir fetch (via the aikit-sdk extension) because it keeps templa
 - Rubric/template content is editable without rebuilding the binary.
 
 **Negative / to action:**
-- The "works without init" guarantee is **dropped**; `specs/vision.md` and `pack.rs` docs must be updated. First use now needs network + an explicit `dk install`.
+- The "works without init" guarantee is **dropped**. First use now needs network + an explicit `dk install`. Docs must follow: `specs/vision.md` (legacy) is **removed**, and `README.md` / `CONTRIBUTING.md` / `pack.rs` doc-comments are corrected to drop the embedded-fallback model (see issue #11 R5).
 - `dk` is blocked on the aikit-sdk subpath change before this can ship.

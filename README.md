@@ -49,6 +49,29 @@ dk review --template default --title "Add auth" --base-ref main --head-ref featu
 dk review --template default --focus security --focus concurrency
 ```
 
+**SARIF output (opt-in)**
+```sh
+dk review --template default --sarif dk-review.sarif
+```
+
+Or configure a default SARIF path in `dk.toml`:
+```toml
+[output]
+sarif_path = "dk-review.sarif"
+```
+
+The `--sarif` flag composes with any `--output-format` value — both the human report and the SARIF file are produced from a single LLM invocation.
+
+GitHub Actions integration:
+```yaml
+- run: dk review --template default --sarif dk-review.sarif
+- uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: dk-review.sarif
+```
+
+Score, verdict, and grades are informational in `run.properties` and are not represented in standard SARIF fields.
+
 ## Template packs
 
 A template pack defines the review rubric, prompt, output schema, and report format. You must specify `--template <name>` on every `dk review` and `dk check` invocation.

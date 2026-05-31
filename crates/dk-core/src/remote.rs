@@ -46,11 +46,9 @@ fn map_install_err(src: &str, e: InstallError) -> RemoteError {
 ///
 /// Returns the resolved pack directory path.
 pub fn fetch_pack(source_str: &str, dest_dir: &Path) -> Result<PathBuf, RemoteError> {
-    let source = TemplateSource::parse(source_str)
-        .map_err(|e| map_install_err(source_str, e))?;
+    let source = TemplateSource::parse(source_str).map_err(|e| map_install_err(source_str, e))?;
 
-    let staging =
-        tempfile::tempdir().map_err(|e| RemoteError::Io(io::Error::new(io::ErrorKind::Other, e)))?;
+    let staging = tempfile::tempdir().map_err(|e| RemoteError::Io(io::Error::other(e)))?;
 
     let (manifest, pack_root) = aikit_sdk::fetch::fetch_package_to_dir(&source, staging.path())
         .map_err(|e| map_install_err(source_str, e))?;

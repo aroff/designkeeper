@@ -30,15 +30,14 @@ bad()  { FAIL=$((FAIL+1)); printf '  \033[31mFAIL\033[0m %s\n' "$*"; }
 
 assert_rc() {
   local want="$1" desc="$2"; shift 2; [ "$1" = "--" ] && shift
-  "$@" >/tmp/dk_smoke.out 2>&1
-  local got=$?
+  "$@" >/tmp/dk_smoke.out 2>&1 && local got=0 || local got=$?
   if [ "$got" = "$want" ]; then ok "$desc (rc=$got)"; else
     bad "$desc (want rc=$want, got $got)"; sed 's/^/      | /' /tmp/dk_smoke.out; fi
 }
 
 assert_contains() {
   local needle="$1" desc="$2"; shift 2; [ "$1" = "--" ] && shift
-  local out; out="$("$@" 2>&1)"
+  local out; out="$("$@" 2>&1)" || true
   if printf '%s' "$out" | grep -qF "$needle"; then ok "$desc"; else
     bad "$desc (missing: $needle)"; printf '%s\n' "$out" | sed 's/^/      | /'; fi
 }

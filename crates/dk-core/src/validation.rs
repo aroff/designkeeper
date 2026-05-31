@@ -12,7 +12,6 @@ pub struct ValidationWarning {
     pub message: String,
 }
 
-
 /// Apply non-blocking checks V3-V4 and return any warnings.
 pub fn validate_output(output: &ReviewOutput) -> Vec<ValidationWarning> {
     let mut warnings = Vec::new();
@@ -60,7 +59,10 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn grade(score: f64) -> GradeEntry {
-        GradeEntry::Scored(crate::types::ScoredGrade { score, rationale: "r".to_string() })
+        GradeEntry::Scored(crate::types::ScoredGrade {
+            score,
+            rationale: "r".to_string(),
+        })
     }
 
     fn base_output(verdict: Verdict, overall: f64) -> ReviewOutput {
