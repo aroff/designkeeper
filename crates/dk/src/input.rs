@@ -389,6 +389,25 @@ mod tests {
     }
 
     #[test]
+    fn emit_writes_to_output_file_creating_parent_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("nested").join("deep").join("report.md");
+        let a = args(&[("output-file", out.to_str().unwrap())], &[]);
+        emit(&a, "hello world").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&out).unwrap(),
+            "hello world",
+            "emit should write content and create missing parent dirs"
+        );
+    }
+
+    #[test]
+    fn emit_without_output_file_returns_ok() {
+        // No --output-file: content goes to stdout, call still succeeds.
+        assert!(emit(&args(&[], &[]), "to stdout").is_ok());
+    }
+
+    #[test]
     fn test_sarif_flag_overrides_config() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(

@@ -466,3 +466,118 @@ fn run_install_cmd(args: CommandArgs) -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn arg_names(cmd: &Command) -> Vec<&'static str> {
+        cmd.spec
+            .as_ref()
+            .expect("command has a spec")
+            .args
+            .iter()
+            .map(|a| a.name)
+            .collect()
+    }
+
+    #[test]
+    fn review_is_mcp_exposed_with_expected_args() {
+        let cmd = review_command();
+        assert_eq!(cmd.id, "review");
+        assert!(cmd.expose_mcp, "review must be surfaced as an MCP tool");
+        assert_eq!(cmd.category, Some("analysis"));
+        assert!(
+            cmd.syntax.is_some(),
+            "review should advertise a syntax line"
+        );
+        let names = arg_names(&cmd);
+        for expected in [
+            "template",
+            "focus",
+            "sarif",
+            "max-findings",
+            "include-dimensions",
+            "path",
+        ] {
+            assert!(
+                names.contains(&expected),
+                "review missing {expected}: {names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn review_focus_enumerates_every_focus_area() {
+        let cmd = review_command();
+        let spec = cmd.spec.as_ref().unwrap();
+        let focus = spec
+            .args
+            .iter()
+            .find(|a| a.name == "focus")
+            .expect("review has a --focus arg");
+        match &focus.value_type {
+            ArgValueType::Enum(values) => {
+                for v in [
+                    "security",
+                    "concurrency",
+                    "accessibility",
+                    "internationalization",
+                    "privacy",
+                    "performance",
+                    "api_design",
+                    "ui",
+                ] {
+                    assert!(values.contains(&v), "focus enum missing {v}");
+                }
+            }
+            _ => panic!("--focus should be an Enum value type"),
+        }
+        assert!(
+            matches!(focus.cardinality, Cardinality::Repeated),
+            "--focus must be repeatable"
+        );
+    }
+
+    #[test]
+    fn check_is_not_mcp_exposed_and_has_verbose() {
+        let cmd = check_command();
+        assert_eq!(cmd.id, "check");
+        assert!(!cmd.expose_mcp, "check must not become an MCP tool");
+        assert!(arg_names(&cmd).contains(&"verbose"));
+    }
+
+    #[test]
+    fn init_and_install_are_unexposed_setup_commands() {
+        let init = init_command();
+        assert_eq!(init.id, "init");
+        assert!(!init.expose_mcp);
+        assert_eq!(init.category, Some("setup"));
+
+        let install = install_command();
+        assert_eq!(install.id, "install");
+        assert!(!install.expose_mcp);
+        let names = arg_names(&install);
+        assert!(names.contains(&"global"), "install should have --global");
+        assert!(
+            names.contains(&"source"),
+            "install should have a source positional"
+        );
+    }
+
+    #[test]
+    fn common_args_carry_the_shared_flags() {
+        let names: Vec<&str> = common_args().iter().map(|a| a.name).collect();
+        for expected in [
+            "template",
+            "agent",
+            "model",
+            "output-format",
+            "output-file",
+            "timeout",
+            "max-retries",
+        ] {
+            assert!(names.contains(&expected), "common_args missing {expected}");
+        }
+    }
+}
