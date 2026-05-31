@@ -16,12 +16,13 @@ use cli_framework::prelude::*;
 use cli_framework::spec::arg_spec::{ArgKind, ArgValueType, Cardinality};
 
 use dk_core::config::{default_config, resolve_config, OutputFormat};
+use dk_core::PackScope;
 use dk_core::{pack_store, review, run_check};
 use dk_core::{run_init, InitParams};
-use dk_core::PackScope;
 
 use input::{
-    current_dir, emit, flag, output_format, prompt_or_default, resolve_common_args,
+    current_dir, effective_sarif_path, emit, flag, output_format, prompt_or_default,
+    resolve_common_args,
 };
 use progress::{fail, ProgressReporter};
 
@@ -159,7 +160,15 @@ fn review_command() -> Command {
             requires: vec![],
             help: "Focus area (repeatable)",
         },
-        int_opt("max-findings", "Maximum findings to emit (1-50, default 25)"),
+        int_opt(
+            "max-findings",
+            "Maximum findings to emit (1-50, default 25)",
+        ),
+        opt(
+            "sarif",
+            None,
+            "Also write a SARIF 2.1.0 report to this file",
+        ),
         positional_spec("path", "Path/glob root within the repo to focus the review"),
     ]);
     let spec = CommandSpec {
@@ -181,13 +190,20 @@ fn review_command() -> Command {
 
 fn check_command() -> Command {
     let mut args = common_args();
-    args.push(flag_spec("verbose", Some('v'), "Print the full scored report to stdout"));
+    args.push(flag_spec(
+        "verbose",
+        Some('v'),
+        "Print the full scored report to stdout",
+    ));
     args.push(opt(
         "from-git",
         None,
         "Derive PR context from git using <base-ref> as the merge base",
     ));
-    args.push(positional_spec("path", "Path/glob root within the repo to focus the review"));
+    args.push(positional_spec(
+        "path",
+        "Path/glob root within the repo to focus the review",
+    ));
     let spec = CommandSpec {
         summary: "Pass/fail review gate (verdict -> exit code)",
         args,
@@ -223,14 +239,23 @@ fn init_command() -> Command {
         spec: Some(Arc::new(spec)),
         validator: None,
         expose_mcp: false,
-        execute: Arc::new(|_ctx, args| Box::pin(async move { run_init_cmd(args) })),
+        execute: Arc::new(|_ctx, args| {
+            Box::pin(async move { tokio::task::block_in_place(|| run_init_cmd(args)) })
+        }),
     }
 }
 
 fn install_command() -> Command {
     let args = vec![
-        flag_spec("global", Some('g'), "Install packs to ~/.dk/packs/ (user-global) instead of .dk/packs/"),
-        positional_spec("source", "Pack source: owner/repo, URL, or local path. Omit to install all official packs."),
+        flag_spec(
+            "global",
+            Some('g'),
+            "Install packs to ~/.dk/packs/ (user-global) instead of .dk/packs/",
+        ),
+        positional_spec(
+            "source",
+            "Pack source: owner/repo, URL, or local path. Omit to install all official packs.",
+        ),
     ];
     let spec = CommandSpec {
         summary: "Install template packs from GitHub, a URL, or a local path",
@@ -245,14 +270,20 @@ fn install_command() -> Command {
         spec: Some(Arc::new(spec)),
         validator: None,
         expose_mcp: false,
-        execute: Arc::new(|_ctx, args| Box::pin(async move { run_install_cmd(args) })),
+        execute: Arc::new(|_ctx, args| {
+            Box::pin(async move { tokio::task::block_in_place(|| run_install_cmd(args)) })
+        }),
     }
 }
 
 /// Flags shared by `review` and `check`.
 fn common_args() -> Vec<ArgSpec> {
     vec![
-        opt("template", Some('t'), "Template pack name (required, e.g. default, structural)"),
+        opt(
+            "template",
+            Some('t'),
+            "Template pack name (required, e.g. default, structural)",
+        ),
         opt("agent", Some('a'), "Agent key (overrides dk.toml)"),
         opt("model", Some('m'), "Model override (overrides dk.toml)"),
         opt(
@@ -266,7 +297,10 @@ fn common_args() -> Vec<ArgSpec> {
             "Write output to this file instead of stdout",
         ),
         int_opt("timeout", "Agent timeout in seconds (0 = no timeout)"),
-        int_opt("max-retries", "Max retry attempts after first failure (default 2)"),
+        int_opt(
+            "max-retries",
+            "Max retry attempts after first failure (default 2)",
+        ),
     ]
 }
 
@@ -283,7 +317,9 @@ fn run_review_cmd(args: CommandArgs) -> anyhow::Result<()> {
 
     let reporter = ProgressReporter::new(&c.config.agent.agent);
     let runner = review::build_agent_runner(&c.config, &c.input);
-    let result = review::run_review(c.input, &c.config, &c.template_dir, runner, &|e| reporter.handle(e));
+    let result = review::run_review(c.input, &c.config, &c.template_dir, runner, &|e| {
+        reporter.handle(e)
+    });
     reporter.finish();
     let output = match result {
         Ok(o) => o,
@@ -291,6 +327,26 @@ fn run_review_cmd(args: CommandArgs) -> anyhow::Result<()> {
     };
 
     let format = output_format(&args, &c.config);
+
+    // Build SARIF before the primary emit so we can reuse output.
+    let sarif_path = effective_sarif_path(&args, &c.config);
+    let sarif_rendered: Option<String> =
+        if sarif_path.is_some() || matches!(format, OutputFormat::Sarif) {
+            let meta = dk_core::SarifRunMeta {
+                tool_name: "dk".into(),
+                tool_version: env!("CARGO_PKG_VERSION").into(),
+                agent_key: c.config.agent.agent.clone(),
+                model: c.config.agent.model.clone(),
+            };
+            let sarif = dk_core::sarif::to_sarif(&output, &meta);
+            Some(
+                serde_json::to_string_pretty(&sarif)
+                    .unwrap_or_else(|e| fail("DK_IO_ERROR", &e.to_string())),
+            )
+        } else {
+            None
+        };
+
     let rendered = match format {
         OutputFormat::Json => serde_json::to_string_pretty(&output)
             .unwrap_or_else(|e| fail("DK_IO_ERROR", &e.to_string())),
@@ -298,11 +354,24 @@ fn run_review_cmd(args: CommandArgs) -> anyhow::Result<()> {
             Ok(r) => r,
             Err(e) => fail(e.code(), &e.to_string()),
         },
+        OutputFormat::Sarif => sarif_rendered
+            .clone()
+            .unwrap_or_else(|| fail("DK_IO_ERROR", "SARIF render failed")),
     };
 
     if let Err(e) = emit(&args, &rendered) {
         fail("DK_IO_ERROR", &e.to_string());
     }
+
+    // Write SARIF side-channel if requested.
+    if let Some(path) = sarif_path {
+        let content =
+            sarif_rendered.unwrap_or_else(|| fail("DK_IO_ERROR", "SARIF render unavailable"));
+        if let Err(e) = std::fs::write(&path, &content) {
+            fail("DK_IO_ERROR", &e.to_string());
+        }
+    }
+
     Ok(())
 }
 
@@ -346,7 +415,11 @@ fn run_init_cmd(args: CommandArgs) -> anyhow::Result<()> {
         Err(e) => fail(e.code(), &e.to_string()),
     };
 
-    let verb = if outcome.updated_existing { "Updated" } else { "Created" };
+    let verb = if outcome.updated_existing {
+        "Updated"
+    } else {
+        "Created"
+    };
     println!("{verb} {}", outcome.config_path.display());
     if outcome.installed_packs.is_empty() {
         println!("No packs installed (check dk-templates.toml sources).");
@@ -361,11 +434,19 @@ fn run_init_cmd(args: CommandArgs) -> anyhow::Result<()> {
 fn run_install_cmd(args: CommandArgs) -> anyhow::Result<()> {
     let cwd = current_dir();
     let global = flag(&args, "global");
-    let scope = if global { PackScope::Global } else { PackScope::Project };
+    let scope = if global {
+        PackScope::Global
+    } else {
+        PackScope::Project
+    };
 
     let dest_base = if global {
-        pack_store::global_packs_dir()
-            .unwrap_or_else(|| fail("DK_IO_ERROR", "cannot determine home directory for --global install"))
+        pack_store::global_packs_dir().unwrap_or_else(|| {
+            fail(
+                "DK_IO_ERROR",
+                "cannot determine home directory for --global install",
+            )
+        })
     } else {
         cwd.join(".dk").join("packs")
     };

@@ -16,6 +16,7 @@ pub mod pack;
 pub mod pack_store;
 pub mod remote;
 pub mod review;
+pub mod sarif;
 pub mod slots;
 pub mod types;
 pub mod validation;
@@ -30,12 +31,11 @@ pub use pack_store::{
     global_packs_dir, install_pack, install_pack_or_embedded_fallback, list_packs, resolve_pack,
     DkTemplatesManifest, InstalledPack, PackEntry, PackScope, PackStoreError,
 };
+pub use review::{build_agent_runner, run_review, Progress, ProgressFn, ReviewError};
+pub use sarif::SarifRunMeta;
 pub use types::{
-    ChangeContext, DEFAULT_MAX_FINDINGS, Dimension, Finding, FocusArea, GradeEntry,
-    NotEvaluatedGrade, ProjectHints, ReviewInput, ReviewOptions, ReviewOutput, ScoredGrade,
-    Severity, Summary, Verdict,
-};
-pub use review::{
-    build_agent_runner, run_review, Progress, ProgressFn, ReviewError,
+    ChangeContext, Dimension, Finding, FocusArea, GradeEntry, NotEvaluatedGrade, ProjectHints,
+    ReviewInput, ReviewOptions, ReviewOutput, ScoredGrade, Severity, Summary, Verdict,
+    DEFAULT_MAX_FINDINGS,
 };
 pub use validation::{validate_output, ValidationWarning};

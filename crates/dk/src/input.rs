@@ -7,13 +7,16 @@ use cli_framework::prelude::CommandArgs;
 
 use dk_core::config::{resolve_config, DkConfig, OutputFormat};
 use dk_core::pack_store;
-use dk_core::{ChangeContext, DEFAULT_MAX_FINDINGS, Dimension, FocusArea, ReviewInput, ReviewOptions};
+use dk_core::{
+    ChangeContext, Dimension, FocusArea, ReviewInput, ReviewOptions, DEFAULT_MAX_FINDINGS,
+};
 
 pub fn current_dir() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
 pub struct CommonArgs {
+    #[allow(dead_code)]
     pub cwd: PathBuf,
     pub config: DkConfig,
     pub input: ReviewInput,
@@ -34,7 +37,12 @@ pub fn resolve_common_args(args: &CommandArgs) -> CommonArgs {
     });
     let template_dir = pack_store::resolve_pack(&template_name, &cwd)
         .unwrap_or_else(|e| crate::progress::fail(e.code(), &e.to_string()));
-    CommonArgs { cwd, config, input, template_dir }
+    CommonArgs {
+        cwd,
+        config,
+        input,
+        template_dir,
+    }
 }
 
 /// Resolve config from `dk.toml`, then apply CLI agent/model overrides
@@ -81,19 +89,32 @@ pub fn build_change_context(
 ) -> (Option<ChangeContext>, Option<String>) {
     let (git_ctx, git_target) = match args.named.get("from-git") {
         Some(base) => {
-            let (ctx, target) = dk_core::git::change_context_from_git(cwd, base, &config.scan.extensions);
+            let (ctx, target) =
+                dk_core::git::change_context_from_git(cwd, base, &config.scan.extensions);
             (Some(ctx), target)
         }
         None => (None, None),
     };
 
-    let title       = args.named.get("title").cloned()
+    let title = args
+        .named
+        .get("title")
+        .cloned()
         .or_else(|| git_ctx.as_ref()?.title.clone());
-    let description = args.named.get("description").map(|d| read_file_or_text(d))
+    let description = args
+        .named
+        .get("description")
+        .map(|d| read_file_or_text(d))
         .or_else(|| git_ctx.as_ref()?.description.clone());
-    let base_ref    = args.named.get("base-ref").cloned()
+    let base_ref = args
+        .named
+        .get("base-ref")
+        .cloned()
         .or_else(|| git_ctx.as_ref()?.base_ref.clone());
-    let head_ref    = args.named.get("head-ref").cloned()
+    let head_ref = args
+        .named
+        .get("head-ref")
+        .cloned()
         .or_else(|| git_ctx.as_ref()?.head_ref.clone());
     let git_diff_stat = git_ctx.and_then(|c| c.diff_stat);
 
@@ -103,7 +124,13 @@ pub fn build_change_context(
         git_diff_stat
     };
 
-    let cc = ChangeContext { title, description, base_ref, head_ref, diff_stat };
+    let cc = ChangeContext {
+        title,
+        description,
+        base_ref,
+        head_ref,
+        diff_stat,
+    };
     let change_context = if !cc.is_empty() { Some(cc) } else { None };
 
     (change_context, git_target)
@@ -135,7 +162,11 @@ pub fn map_input(args: &CommandArgs, cwd: &Path, config: &DkConfig) -> Result<Re
             "--include-dimensions",
             Dimension::parse,
         )?;
-        if dims.is_empty() { None } else { Some(dims) }
+        if dims.is_empty() {
+            None
+        } else {
+            Some(dims)
+        }
     };
 
     Ok(ReviewInput {
@@ -151,11 +182,7 @@ pub fn map_input(args: &CommandArgs, cwd: &Path, config: &DkConfig) -> Result<Re
     })
 }
 
-fn parse_comma_list<T, F>(
-    arg: Option<&String>,
-    flag_name: &str,
-    parse: F,
-) -> Result<Vec<T>, String>
+fn parse_comma_list<T, F>(arg: Option<&String>, flag_name: &str, parse: F) -> Result<Vec<T>, String>
 where
     F: Fn(&str) -> Option<T>,
 {
@@ -182,6 +209,14 @@ pub fn read_file_or_text(value: &str) -> String {
 
 pub fn flag(args: &CommandArgs, name: &str) -> bool {
     args.named.get(name).map(|v| v == "true").unwrap_or(false)
+}
+
+/// Return the effective SARIF output path: CLI flag takes precedence over config.
+pub fn effective_sarif_path(args: &CommandArgs, config: &DkConfig) -> Option<String> {
+    args.named
+        .get("sarif")
+        .cloned()
+        .or_else(|| config.output.sarif_path.clone())
 }
 
 /// Write `content` to `--output-file` if set, otherwise to stdout.
@@ -336,6 +371,37 @@ mod tests {
     fn flag_detection() {
         assert!(flag(&args(&[("verbose", "true")], &[]), "verbose"));
         assert!(!flag(&args(&[], &[]), "verbose"));
+    }
+
+    #[test]
+    fn test_sarif_flag_overrides_config() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("dk.toml"),
+            "[output]\nsarif_path = \"default.sarif\"\n",
+        )
+        .unwrap();
+        let cfg = resolved_config(&args(&[], &[]), dir.path()).unwrap();
+        let a = args(&[("sarif", "override.sarif")], &[]);
+        assert_eq!(
+            effective_sarif_path(&a, &cfg).as_deref(),
+            Some("override.sarif")
+        );
+    }
+
+    #[test]
+    fn test_sarif_config_used_when_no_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("dk.toml"),
+            "[output]\nsarif_path = \"default.sarif\"\n",
+        )
+        .unwrap();
+        let cfg = resolved_config(&args(&[], &[]), dir.path()).unwrap();
+        assert_eq!(
+            effective_sarif_path(&args(&[], &[]), &cfg).as_deref(),
+            Some("default.sarif")
+        );
     }
 
     // ---- AC-FG: --from-git tests -------------------------------------------

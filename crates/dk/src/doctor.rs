@@ -61,7 +61,11 @@ impl DoctorCheck for ConfigCheck {
             let dir = current_dir();
             let config_path = find_up(&dir, |d| {
                 let p = d.join("dk.toml");
-                if p.is_file() { Some(p) } else { None }
+                if p.is_file() {
+                    Some(p)
+                } else {
+                    None
+                }
             });
             match resolve_config(&dir) {
                 Ok(cfg) => {
@@ -77,7 +81,14 @@ impl DoctorCheck for ConfigCheck {
                             Some("Run `dk init` to create a dk.toml.".to_string()),
                         ),
                     };
-                    finding(id, title, CheckSeverity::Ok, message, Some(detail), remediation)
+                    finding(
+                        id,
+                        title,
+                        CheckSeverity::Ok,
+                        message,
+                        Some(detail),
+                        remediation,
+                    )
                 }
                 Err(e) => finding(
                     id,

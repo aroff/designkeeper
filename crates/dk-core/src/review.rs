@@ -12,7 +12,6 @@ use crate::pack;
 use crate::types::{ReviewInput, ReviewOutput};
 use crate::{slots, validation};
 
-
 /// Tolerance for the mean-of-grades drift check (V2).
 pub const MEAN_DRIFT_TOLERANCE: f64 = 0.5;
 

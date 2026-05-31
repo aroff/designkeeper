@@ -5,9 +5,9 @@
 //!   2. `~/.dk/packs/{name}/` (user-global)
 //!   3. Built-in embedded fallback for "default" and "structural"
 
+use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use serde::Deserialize;
@@ -21,12 +21,14 @@ use crate::remote::{self, RemoteError};
 
 #[derive(Debug, Error)]
 pub enum PackStoreError {
-    #[error(
-        "template pack '{name}' is not installed. Run `dk install` to fetch template packs."
-    )]
+    #[error("template pack '{name}' is not installed. Run `dk install` to fetch template packs.")]
     NotFound { name: String },
     #[error("failed to install pack from '{source}': {cause}")]
-    InstallFailed { source: String, #[source] cause: RemoteError },
+    InstallFailed {
+        source: String,
+        #[source]
+        cause: RemoteError,
+    },
     #[error("io error: {0}")]
     Io(#[from] io::Error),
 }
@@ -59,14 +61,13 @@ pub struct DkTemplatesManifest {
 }
 
 impl DkTemplatesManifest {
-    pub fn from_str(s: &str) -> Result<Self, toml::de::Error> {
+    pub fn parse(s: &str) -> Result<Self, toml::de::Error> {
         toml::from_str(s)
     }
 
     /// Parse the embedded manifest bundled into the binary.
     pub fn embedded() -> Self {
-        Self::from_str(pack::DK_TEMPLATES_MANIFEST)
-            .expect("embedded dk-templates.toml must parse")
+        Self::parse(pack::DK_TEMPLATES_MANIFEST).expect("embedded dk-templates.toml must parse")
     }
 
     /// Walk up from `cwd` for a `dk-templates.toml`; fall back to embedded.
@@ -76,7 +77,7 @@ impl DkTemplatesManifest {
             if candidate.is_file() {
                 std::fs::read_to_string(&candidate)
                     .ok()
-                    .and_then(|s| Self::from_str(&s).ok())
+                    .and_then(|s| Self::parse(&s).ok())
             } else {
                 None
             }
@@ -150,8 +151,9 @@ pub fn resolve_pack(name: &str, cwd: &Path) -> Result<PathBuf, PackStoreError> {
         return Ok(dir);
     }
     // Built-in fallback for embedded packs
-    write_embedded_pack_to_temp(name)
-        .ok_or_else(|| PackStoreError::NotFound { name: name.to_string() })
+    write_embedded_pack_to_temp(name).ok_or_else(|| PackStoreError::NotFound {
+        name: name.to_string(),
+    })
 }
 
 static EMBEDDED_PACK_DIRS: OnceLock<Mutex<HashMap<String, PathBuf>>> = OnceLock::new();
@@ -169,12 +171,15 @@ fn write_embedded_pack_to_temp(name: &str) -> Option<PathBuf> {
     }
     let base = std::env::temp_dir().join(format!("dk-pack-{name}-{}", std::process::id()));
     let wrote = match name {
-        "default"    => pack::write_default_pack(&base).is_ok(),
+        "default" => pack::write_default_pack(&base).is_ok(),
         "structural" => pack::write_structural_pack(&base).is_ok(),
-        _            => return None,
+        _ => return None,
     };
     if wrote {
-        embedded_pack_dirs().lock().unwrap().insert(name.to_string(), base.clone());
+        embedded_pack_dirs()
+            .lock()
+            .unwrap()
+            .insert(name.to_string(), base.clone());
         Some(base)
     } else {
         None
@@ -189,12 +194,11 @@ pub fn install_pack(
     dest_base: &Path,
     scope: PackScope,
 ) -> Result<InstalledPack, PackStoreError> {
-    let pack_dir = remote::fetch_pack(source_str, dest_base).map_err(|e| {
-        PackStoreError::InstallFailed {
+    let pack_dir =
+        remote::fetch_pack(source_str, dest_base).map_err(|e| PackStoreError::InstallFailed {
             source: source_str.to_string(),
             cause: e,
-        }
-    })?;
+        })?;
 
     let name = pack_dir
         .file_name()
@@ -236,7 +240,11 @@ fn collect_packs_in(packs_dir: &Path, scope: PackScope) -> Vec<InstalledPack> {
 pub fn list_packs(cwd: &Path) -> Vec<InstalledPack> {
     let project_dk = find_up(cwd, |dir| {
         let dk = dir.join(".dk");
-        if dk.is_dir() { Some(dk) } else { None }
+        if dk.is_dir() {
+            Some(dk)
+        } else {
+            None
+        }
     });
 
     let mut seen = std::collections::HashSet::new();
@@ -281,7 +289,11 @@ pub fn install_pack_or_embedded_fallback(
                 _ => return Ok(None),
             };
             if wrote {
-                Ok(Some(InstalledPack { name: entry.name.clone(), path: fallback_dest, scope: PackScope::Embedded }))
+                Ok(Some(InstalledPack {
+                    name: entry.name.clone(),
+                    path: fallback_dest,
+                    scope: PackScope::Embedded,
+                }))
             } else {
                 Ok(None)
             }
@@ -317,7 +329,9 @@ mod tests {
             source: "not-a-real-source://invalid".to_string(),
         };
         let result = install_pack_or_embedded_fallback(&entry, dir.path(), PackScope::Project);
-        let pack = result.unwrap().expect("expected Some(InstalledPack) from fallback");
+        let pack = result
+            .unwrap()
+            .expect("expected Some(InstalledPack) from fallback");
         assert_eq!(pack.name, "default");
         assert!(pack.path.join("templates").join("review.md").is_file());
     }

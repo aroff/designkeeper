@@ -23,3 +23,5 @@ aikit-sdk = { path = "../../goaikit/aikit/aikit-sdk" }
 jsonschema = "0.46"
 openssl = { version = "0.10", features = ["vendored"] }
 dirs = "5"
+serde-sarif = "0.8"
+sha2 = "0.10"

@@ -28,6 +28,7 @@ pub struct ScanConfig {
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutputConfig {
     pub format: OutputFormat,
+    pub sarif_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -35,6 +36,7 @@ pub struct OutputConfig {
 pub enum OutputFormat {
     Markdown,
     Json,
+    Sarif,
 }
 
 impl OutputFormat {
@@ -42,6 +44,7 @@ impl OutputFormat {
         match s.trim().to_ascii_lowercase().as_str() {
             "markdown" | "md" => Some(Self::Markdown),
             "json" => Some(Self::Json),
+            "sarif" => Some(Self::Sarif),
             _ => None,
         }
     }
@@ -103,6 +106,7 @@ pub fn default_config() -> DkConfig {
         },
         output: OutputConfig {
             format: OutputFormat::Markdown,
+            sarif_path: None,
         },
         agent: AgentConfig {
             agent: "claude".to_string(),
@@ -165,6 +169,7 @@ struct RawScan {
 #[serde(deny_unknown_fields)]
 struct RawOutput {
     format: Option<OutputFormat>,
+    sarif_path: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -196,6 +201,9 @@ impl RawConfig {
         if let Some(output) = self.output {
             if let Some(format) = output.format {
                 cfg.output.format = format;
+            }
+            if let Some(sarif_path) = output.sarif_path {
+                cfg.output.sarif_path = Some(sarif_path);
             }
         }
         if let Some(agent) = self.agent {
@@ -229,6 +237,7 @@ mod tests {
         assert_eq!(cfg, default_config());
         assert_eq!(cfg.agent.agent, "claude");
         assert_eq!(cfg.output.format, OutputFormat::Markdown);
+        assert_eq!(cfg.output.sarif_path, None);
         assert_eq!(cfg.scan.extensions.len(), DEFAULT_EXTENSIONS.len());
     }
 
@@ -258,9 +267,29 @@ pack = "https://example.com/pack"
         assert_eq!(cfg.scan.extensions, vec![".rs", ".ts"]);
         assert_eq!(cfg.scan.ignore_patterns, vec!["vendor/", "generated/"]);
         assert_eq!(cfg.output.format, OutputFormat::Json);
+        assert_eq!(cfg.output.sarif_path, None);
         assert_eq!(cfg.agent.agent, "codex");
         assert_eq!(cfg.agent.model.as_deref(), Some("gpt-5"));
         assert_eq!(cfg.templates.pack, "https://example.com/pack");
+    }
+
+    #[test]
+    fn test_sarif_path_from_toml() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("dk.toml"),
+            "[output]\nsarif_path = \"out.sarif\"\n",
+        )
+        .unwrap();
+        let cfg = resolve_config(dir.path()).unwrap();
+        assert_eq!(cfg.output.sarif_path.as_deref(), Some("out.sarif"));
+    }
+
+    #[test]
+    fn test_sarif_path_default_is_none() {
+        let dir = tempdir().unwrap();
+        let cfg = resolve_config(dir.path()).unwrap();
+        assert_eq!(cfg.output.sarif_path, None);
     }
 
     #[test]

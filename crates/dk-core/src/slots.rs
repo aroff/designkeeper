@@ -39,7 +39,8 @@ mod prompt {
             }
         };
 
-        let methodology = read_or_default(&pack::methodology_path(template_dir), pack::METHODOLOGY)?;
+        let methodology =
+            read_or_default(&pack::methodology_path(template_dir), pack::METHODOLOGY)?;
         let output_schema = minify_schema(&pack::output_schema_path(template_dir))?;
 
         let mut slots = HashMap::new();
@@ -348,7 +349,12 @@ mod report {
         if items.is_empty() {
             return "None.".to_string();
         }
-        items.iter().enumerate().map(|(i, s)| fmt(i, s)).collect::<Vec<_>>().join("\n")
+        items
+            .iter()
+            .enumerate()
+            .map(|(i, s)| fmt(i, s))
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     fn bullet_list(items: &[String]) -> String {
@@ -362,9 +368,7 @@ mod report {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use crate::types::{
-            Dimension, Finding, ReviewOptions, ReviewOutput, Severity, Summary, Verdict,
-        };
+        use crate::types::{Dimension, Finding, ReviewOutput, Severity, Summary, Verdict};
         use std::collections::BTreeMap;
 
         fn minimal_output_with_finding(finding: Finding) -> ReviewOutput {

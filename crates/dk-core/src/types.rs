@@ -73,9 +73,13 @@ pub enum FocusArea {
 }
 
 impl FocusArea {
-    pub fn as_key(&self) -> String { serde_key(self) }
+    pub fn as_key(&self) -> String {
+        serde_key(self)
+    }
 
-    pub fn parse(s: &str) -> Option<Self> { parse_enum_from_str(s) }
+    pub fn parse(s: &str) -> Option<Self> {
+        parse_enum_from_str(s)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -137,9 +141,13 @@ pub enum Dimension {
 }
 
 impl Dimension {
-    pub fn as_key(&self) -> String { serde_key(self) }
+    pub fn as_key(&self) -> String {
+        serde_key(self)
+    }
 
-    pub fn parse(s: &str) -> Option<Self> { parse_enum_from_str(s) }
+    pub fn parse(s: &str) -> Option<Self> {
+        parse_enum_from_str(s)
+    }
 }
 
 /// Declaration order is significant: it defines severity ranking (blockers
@@ -154,10 +162,17 @@ pub enum Severity {
 }
 
 impl Severity {
-    pub fn as_key(&self) -> String { serde_key(self) }
+    pub fn as_key(&self) -> String {
+        serde_key(self)
+    }
 
     pub fn all() -> &'static [Severity] {
-        &[Severity::Blocker, Severity::Major, Severity::Minor, Severity::Nit]
+        &[
+            Severity::Blocker,
+            Severity::Major,
+            Severity::Minor,
+            Severity::Nit,
+        ]
     }
 }
 
@@ -171,7 +186,9 @@ pub enum Verdict {
 }
 
 impl Verdict {
-    pub fn as_key(&self) -> String { serde_key(self) }
+    pub fn as_key(&self) -> String {
+        serde_key(self)
+    }
 
     pub fn is_pass(&self) -> bool {
         matches!(self, Verdict::Approve | Verdict::ApproveWithComments)
@@ -315,7 +332,10 @@ mod tests {
     fn grade_entry_rejects_ambiguous_scored_and_not_evaluated() {
         let ambiguous = r#"{"score":7,"not_evaluated":true,"rationale":"x"}"#;
         let result: Result<GradeEntry, _> = serde_json::from_str(ambiguous);
-        assert!(result.is_err(), "should reject JSON with both score and not_evaluated fields");
+        assert!(
+            result.is_err(),
+            "should reject JSON with both score and not_evaluated fields"
+        );
     }
 
     #[test]
@@ -331,7 +351,12 @@ mod tests {
             FocusArea::Ui,
         ];
         for v in variants {
-            assert_eq!(FocusArea::parse(&v.as_key()), Some(v), "round-trip failed for {:?}", v);
+            assert_eq!(
+                FocusArea::parse(&v.as_key()),
+                Some(v),
+                "round-trip failed for {:?}",
+                v
+            );
         }
     }
 
@@ -353,7 +378,12 @@ mod tests {
             Dimension::ContextAndReviewDepth,
         ];
         for v in variants {
-            assert_eq!(Dimension::parse(&v.as_key()), Some(v), "round-trip failed for {:?}", v);
+            assert_eq!(
+                Dimension::parse(&v.as_key()),
+                Some(v),
+                "round-trip failed for {:?}",
+                v
+            );
         }
     }
 
