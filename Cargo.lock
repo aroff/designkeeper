@@ -507,7 +507,6 @@ dependencies = [
  "crossterm",
  "dirs 5.0.1",
  "httpdate",
- "log",
  "regex",
  "reqwest 0.12.28",
  "rmcp",
@@ -518,6 +517,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "toml 0.8.23",
+ "tracing",
  "uuid",
 ]
 

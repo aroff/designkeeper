@@ -2,3 +2,8 @@
 # Example:
 # *.log
 # tmp/
+*.github
+LICENSE
+*.md
+*.sh
+*.json
