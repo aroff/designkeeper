@@ -96,7 +96,7 @@ dk install https://example.com/pack.zip
 dk install ./local-template-dir
 ```
 
-Packs are resolved in this order: project-local (`.dk/packs/{name}/`) → global (`~/.dk/packs/{name}/`) → embedded fallback for `default` and `structural`.
+Packs are resolved in this order: project-local (`.dk/packs/{name}/`) → global (`~/.dk/packs/{name}/`). If no pack is installed, `dk review` and `dk check` fail with `DK_PACK_NOT_INSTALLED`. Run `dk install` to fetch the official packs.
 
 ### Customizing a pack
 

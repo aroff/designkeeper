@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 
 use aikit_sdk::AgentRunner;
 use dk_core::config::default_config;
-use dk_core::{pack, review, ReviewInput, ReviewOutput, Verdict};
+use dk_core::testutil::copy_default_pack;
+use dk_core::{review, ReviewInput, ReviewOutput, Verdict};
 use serde_json::Value;
 
 fn validate_json(schema: &Value, instance: &Value) -> Result<(), Vec<String>> {
@@ -58,12 +59,22 @@ fn read_json(rel: &str) -> Value {
     serde_json::from_str(&read_fixture(rel)).expect("valid json fixture")
 }
 
+fn templates_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../templates")
+}
+
 fn input_schema() -> Value {
-    serde_json::from_str(pack::INPUT_SCHEMA).unwrap()
+    let path = templates_dir().join("default/schemas/review-input.json");
+    let s =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    serde_json::from_str(&s).expect("valid json schema")
 }
 
 fn output_schema() -> Value {
-    serde_json::from_str(pack::OUTPUT_SCHEMA).unwrap()
+    let path = templates_dir().join("default/schemas/review.json");
+    let s =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    serde_json::from_str(&s).expect("valid json schema")
 }
 
 // ---- AC #14 / #15: input fixtures pass input schema ----------------------
@@ -135,7 +146,7 @@ fn extracts_and_parses_agent_response() {
 
 fn pack_and_workdir() -> (tempfile::TempDir, tempfile::TempDir) {
     let pack_dir = tempfile::tempdir().unwrap();
-    pack::write_default_pack(pack_dir.path()).unwrap();
+    copy_default_pack(pack_dir.path());
     let wd = tempfile::tempdir().unwrap();
     std::fs::write(wd.path().join("lib.rs"), "pub fn x() {}").unwrap();
     (pack_dir, wd)

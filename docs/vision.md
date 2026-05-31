@@ -35,7 +35,7 @@ Interactive setup. Prompts for each parameter not provided on the command line. 
 
 ### `dk review [<path>]`
 
-Evaluates code against a structured review rubric (default: Google eng-practices, 13 dimensions, 0–10 scores). Produces per-dimension scores, a verdict (`approve`, `approve_with_comments`, `request_changes`, `reject`), actionable findings, and suggested next steps. Accepts PR/CL change context (`--title`, `--description`, `--base-ref`, `--head-ref`) and optional focus areas. The rubric methodology ships as a default template (`templates/methodology.md`) that users can edit or replace via the template pack. Works on any directory; no git required. Spec pack: `specs/review/` (schemas, prompt/report templates, examples).
+Evaluates code against a structured review rubric (default: Google eng-practices, 13 dimensions, 0–10 scores). Produces per-dimension scores, a verdict (`approve`, `approve_with_comments`, `request_changes`, `reject`), actionable findings, and suggested next steps. Accepts PR/CL change context (`--title`, `--description`, `--base-ref`, `--head-ref`) and optional focus areas. The rubric methodology ships as a default template (`templates/methodology.md`) that users can edit or replace via the template pack. Works on any directory (requires prior `dk install`); no git required. Spec pack: `specs/review/` (schemas, prompt/report templates, examples).
 
 ### `dk check [<path>]`
 

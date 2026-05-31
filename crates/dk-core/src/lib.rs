@@ -28,8 +28,8 @@ pub use config::{
 };
 pub use init::{run_init, InitError, InitOutcome, InitParams, PackSource};
 pub use pack_store::{
-    global_packs_dir, install_pack, install_pack_or_embedded_fallback, list_packs, resolve_pack,
-    DkTemplatesManifest, InstalledPack, PackEntry, PackScope, PackStoreError,
+    global_packs_dir, install_pack, list_packs, resolve_pack, DkTemplatesManifest, InstalledPack,
+    PackEntry, PackScope, PackStoreError,
 };
 pub use review::{build_agent_runner, run_review, Progress, ProgressFn, ReviewError};
 pub use sarif::SarifRunMeta;

@@ -21,6 +21,7 @@ pub struct CommonArgs {
     pub config: DkConfig,
     pub input: ReviewInput,
     pub template_dir: PathBuf,
+    pub output_format: OutputFormat,
 }
 
 pub fn resolve_common_args(args: &CommandArgs) -> CommonArgs {
@@ -28,6 +29,8 @@ pub fn resolve_common_args(args: &CommandArgs) -> CommonArgs {
     let config = resolved_config(args, &cwd)
         .unwrap_or_else(|msg| crate::progress::fail("DK_CONFIG_PARSE", &msg));
     let input = map_input(args, &cwd, &config)
+        .unwrap_or_else(|msg| crate::progress::fail("DK_INPUT_VALIDATION", &msg));
+    let fmt = output_format(args, &config)
         .unwrap_or_else(|msg| crate::progress::fail("DK_INPUT_VALIDATION", &msg));
     let template_name = args.named.get("template").cloned().unwrap_or_else(|| {
         crate::progress::fail(
@@ -42,6 +45,7 @@ pub fn resolve_common_args(args: &CommandArgs) -> CommonArgs {
         config,
         input,
         template_dir,
+        output_format: fmt,
     }
 }
 
@@ -70,15 +74,10 @@ pub fn resolved_config(args: &CommandArgs, cwd: &Path) -> Result<DkConfig, Strin
     Ok(config)
 }
 
-pub fn output_format(args: &CommandArgs, config: &DkConfig) -> OutputFormat {
+pub fn output_format(args: &CommandArgs, config: &DkConfig) -> Result<OutputFormat, String> {
     match args.named.get("output-format") {
-        Some(s) => OutputFormat::parse(s).unwrap_or_else(|| {
-            crate::progress::fail(
-                "DK_INPUT_VALIDATION",
-                &format!("invalid --output-format: {s}"),
-            )
-        }),
-        None => config.output.format,
+        Some(s) => OutputFormat::parse(s).ok_or_else(|| format!("invalid --output-format: {s}")),
+        None => Ok(config.output.format),
     }
 }
 
@@ -360,10 +359,26 @@ mod tests {
     fn output_format_defaults_to_config() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = resolved_config(&args(&[], &[]), dir.path()).unwrap();
-        assert_eq!(output_format(&args(&[], &[]), &cfg), OutputFormat::Markdown);
         assert_eq!(
-            output_format(&args(&[("output-format", "json")], &[]), &cfg),
+            output_format(&args(&[], &[]), &cfg).unwrap(),
+            OutputFormat::Markdown
+        );
+        assert_eq!(
+            output_format(&args(&[("output-format", "json")], &[]), &cfg).unwrap(),
             OutputFormat::Json
+        );
+    }
+
+    #[test]
+    fn output_format_rejects_invalid_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = resolved_config(&args(&[], &[]), dir.path()).unwrap();
+        let err = output_format(&args(&[("output-format", "xml")], &[]), &cfg);
+        assert!(err.is_err(), "xml is not a valid output format");
+        let msg = err.unwrap_err();
+        assert!(
+            msg.contains("xml"),
+            "error message should mention the invalid value"
         );
     }
 
