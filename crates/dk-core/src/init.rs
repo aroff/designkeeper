@@ -6,12 +6,11 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 use toml_edit::DocumentMut;
 
-use crate::pack_store::{self, DkTemplatesManifest, InstalledPack, PackScope};
+use crate::pack_store::{self, DkTemplatesManifest, InstalledPack, PackScope, PackStoreError};
 
 /// Where a materialized pack came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PackSource {
-    Embedded,
     LocalDir(PathBuf),
     Remote(String),
 }
@@ -39,6 +38,12 @@ pub enum InitError {
     Io(#[from] io::Error),
     #[error("failed to parse existing dk.toml at {path}: {message}")]
     ConfigParse { path: String, message: String },
+    #[error("failed to install pack '{name}': {cause}")]
+    InstallFailed {
+        name: String,
+        #[source]
+        cause: PackStoreError,
+    },
 }
 
 impl InitError {
@@ -46,6 +51,7 @@ impl InitError {
         match self {
             InitError::Io(_) => "DK_IO_ERROR",
             InitError::ConfigParse { .. } => "DK_CONFIG_PARSE",
+            InitError::InstallFailed { .. } => "DK_PACK_INSTALL_FAILED",
         }
     }
 }
@@ -61,7 +67,7 @@ pub fn run_init(working_dir: &Path, params: &InitParams) -> Result<InitOutcome, 
     std::fs::create_dir_all(&packs_dir)?;
 
     let manifest = DkTemplatesManifest::resolve(working_dir);
-    let installed_packs = install_packs_from_manifest(&manifest, &packs_dir);
+    let installed_packs = install_packs_from_manifest(&manifest, &packs_dir)?;
 
     let config_path = working_dir.join("dk.toml");
     let updated_existing = config_path.is_file();
@@ -75,21 +81,21 @@ pub fn run_init(working_dir: &Path, params: &InitParams) -> Result<InitOutcome, 
     })
 }
 
-/// Install all packs listed in the manifest.
-///
-/// Failures for individual packs are non-fatal — we fall back to the embedded
-/// copy for built-ins and skip unknown packs that can't be fetched.
+/// Install all packs listed in the manifest. Fetch failures are propagated as errors.
 fn install_packs_from_manifest(
     manifest: &DkTemplatesManifest,
     packs_dir: &Path,
-) -> Vec<InstalledPack> {
+) -> Result<Vec<InstalledPack>, InitError> {
     manifest
         .packs
         .iter()
-        .filter_map(|entry| {
-            pack_store::install_pack_or_embedded_fallback(entry, packs_dir, PackScope::Project)
-                .ok()
-                .flatten()
+        .map(|entry| {
+            pack_store::install_pack(&entry.source, packs_dir, PackScope::Project).map_err(|e| {
+                InitError::InstallFailed {
+                    name: entry.name.clone(),
+                    cause: e,
+                }
+            })
         })
         .collect()
 }
@@ -130,6 +136,8 @@ mod tests {
     #[test]
     fn init_creates_packs_dir_and_config() {
         let dir = tempdir().unwrap();
+        // Use an empty manifest so install doesn't fail on placeholder sources.
+        std::fs::write(dir.path().join("dk-templates.toml"), "packs = []\n").unwrap();
         let params = InitParams {
             agent: "claude".to_string(),
             model: None,
@@ -143,6 +151,8 @@ mod tests {
     #[test]
     fn update_in_place_preserves_other_sections() {
         let dir = tempdir().unwrap();
+        // Use an empty manifest so install doesn't fail on placeholder sources.
+        std::fs::write(dir.path().join("dk-templates.toml"), "packs = []\n").unwrap();
         std::fs::write(
             dir.path().join("dk.toml"),
             "[scan]\nextensions = [\".rs\"]\n\n[agent]\nagent = \"claude\"\n",
@@ -159,5 +169,23 @@ mod tests {
         let cfg = crate::config::resolve_config(dir.path()).unwrap();
         assert_eq!(cfg.agent.agent, "gemini");
         assert_eq!(cfg.scan.extensions, vec![".rs"]);
+    }
+
+    #[test]
+    fn init_fails_when_pack_fetch_fails() {
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("dk-templates.toml"),
+            "[[packs]]\nname = \"test\"\ndescription = \"test\"\nsource = \"not-a-real-source://invalid\"\n",
+        )
+        .unwrap();
+        let params = InitParams {
+            agent: "claude".to_string(),
+            model: None,
+        };
+        let result = run_init(dir.path(), &params);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code(), "DK_PACK_INSTALL_FAILED");
     }
 }

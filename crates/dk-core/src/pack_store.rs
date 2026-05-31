@@ -3,12 +3,10 @@
 //! Resolution order per pack name:
 //!   1. `.dk/packs/{name}/` walking up from cwd (project-local)
 //!   2. `~/.dk/packs/{name}/` (user-global)
-//!   3. Built-in embedded fallback for "default" and "structural"
+//!   3. Error: `PackStoreError::NotFound`
 
-use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
 
 use serde::Deserialize;
 use thiserror::Error;
@@ -21,7 +19,7 @@ use crate::remote::{self, RemoteError};
 
 #[derive(Debug, Error)]
 pub enum PackStoreError {
-    #[error("template pack '{name}' is not installed. Run `dk install` to fetch template packs.")]
+    #[error("template pack '{name}' is not installed. Run `dk install` first.")]
     NotFound { name: String },
     #[error("failed to install pack from '{source}': {cause}")]
     InstallFailed {
@@ -36,7 +34,7 @@ pub enum PackStoreError {
 impl PackStoreError {
     pub fn code(&self) -> &'static str {
         match self {
-            PackStoreError::NotFound { .. } => "DK_PACK_NOT_FOUND",
+            PackStoreError::NotFound { .. } => "DK_PACK_NOT_INSTALLED",
             PackStoreError::InstallFailed { .. } => "DK_PACK_INSTALL_FAILED",
             PackStoreError::Io(_) => "DK_IO_ERROR",
         }
@@ -99,7 +97,6 @@ pub struct InstalledPack {
 pub enum PackScope {
     Project,
     Global,
-    Embedded,
 }
 
 impl std::fmt::Display for PackScope {
@@ -107,7 +104,6 @@ impl std::fmt::Display for PackScope {
         match self {
             PackScope::Project => write!(f, "project"),
             PackScope::Global => write!(f, "global"),
-            PackScope::Embedded => write!(f, "embedded"),
         }
     }
 }
@@ -142,7 +138,7 @@ fn global_pack_dir(name: &str) -> Option<PathBuf> {
 
 /// Resolve the directory for a named pack.
 ///
-/// Tries project-local → global → embedded built-ins → error.
+/// Tries project-local → global → error.
 pub fn resolve_pack(name: &str, cwd: &Path) -> Result<PathBuf, PackStoreError> {
     if let Some(dir) = project_pack_dir(name, cwd) {
         return Ok(dir);
@@ -150,40 +146,9 @@ pub fn resolve_pack(name: &str, cwd: &Path) -> Result<PathBuf, PackStoreError> {
     if let Some(dir) = global_pack_dir(name) {
         return Ok(dir);
     }
-    // Built-in fallback for embedded packs
-    write_embedded_pack_to_temp(name).ok_or_else(|| PackStoreError::NotFound {
+    Err(PackStoreError::NotFound {
         name: name.to_string(),
     })
-}
-
-static EMBEDDED_PACK_DIRS: OnceLock<Mutex<HashMap<String, PathBuf>>> = OnceLock::new();
-
-fn embedded_pack_dirs() -> &'static Mutex<HashMap<String, PathBuf>> {
-    EMBEDDED_PACK_DIRS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn write_embedded_pack_to_temp(name: &str) -> Option<PathBuf> {
-    {
-        let map = embedded_pack_dirs().lock().unwrap();
-        if let Some(path) = map.get(name) {
-            return Some(path.clone());
-        }
-    }
-    let base = std::env::temp_dir().join(format!("dk-pack-{name}-{}", std::process::id()));
-    let wrote = match name {
-        "default" => pack::write_default_pack(&base).is_ok(),
-        "structural" => pack::write_structural_pack(&base).is_ok(),
-        _ => return None,
-    };
-    if wrote {
-        embedded_pack_dirs()
-            .lock()
-            .unwrap()
-            .insert(name.to_string(), base.clone());
-        Some(base)
-    } else {
-        None
-    }
 }
 
 // ---- Installation ----
@@ -268,39 +233,6 @@ pub fn list_packs(cwd: &Path) -> Vec<InstalledPack> {
     result
 }
 
-/// Install from source, falling back to the embedded pack if source fetch fails.
-///
-/// Returns `Ok(Some(pack))` if installed (from source or fallback),
-/// `Ok(None)` if no embedded fallback exists for this name,
-/// `Err` only on I/O failure writing the fallback.
-pub fn install_pack_or_embedded_fallback(
-    entry: &PackEntry,
-    dest_base: &Path,
-    scope: PackScope,
-) -> Result<Option<InstalledPack>, PackStoreError> {
-    match install_pack(&entry.source, dest_base, scope.clone()) {
-        Ok(p) => Ok(Some(p)),
-        Err(e) => {
-            tracing::warn!("pack {} install failed ({}): {e}", entry.name, entry.source);
-            let fallback_dest = dest_base.join(&entry.name);
-            let wrote = match entry.name.as_str() {
-                "default" => pack::write_default_pack(&fallback_dest).is_ok(),
-                "structural" => pack::write_structural_pack(&fallback_dest).is_ok(),
-                _ => return Ok(None),
-            };
-            if wrote {
-                Ok(Some(InstalledPack {
-                    name: entry.name.clone(),
-                    path: fallback_dest,
-                    scope: PackScope::Embedded,
-                }))
-            } else {
-                Ok(None)
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,33 +250,5 @@ mod tests {
         assert_eq!(packs.len(), 1);
         assert_eq!(packs[0].name, "my-pack");
         assert_eq!(packs[0].scope, PackScope::Project);
-    }
-
-    #[test]
-    fn install_pack_or_embedded_fallback_uses_fallback_on_bad_source() {
-        let dir = tempdir().unwrap();
-        let entry = PackEntry {
-            name: "default".to_string(),
-            description: "Default pack".to_string(),
-            source: "not-a-real-source://invalid".to_string(),
-        };
-        let result = install_pack_or_embedded_fallback(&entry, dir.path(), PackScope::Project);
-        let pack = result
-            .unwrap()
-            .expect("expected Some(InstalledPack) from fallback");
-        assert_eq!(pack.name, "default");
-        assert!(pack.path.join("templates").join("review.md").is_file());
-    }
-
-    #[test]
-    fn install_pack_or_embedded_fallback_returns_none_for_unknown_name() {
-        let dir = tempdir().unwrap();
-        let entry = PackEntry {
-            name: "nonexistent-pack".to_string(),
-            description: "".to_string(),
-            source: "not-a-real-source://invalid".to_string(),
-        };
-        let result = install_pack_or_embedded_fallback(&entry, dir.path(), PackScope::Project);
-        assert!(result.unwrap().is_none());
     }
 }

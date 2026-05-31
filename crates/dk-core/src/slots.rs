@@ -39,8 +39,7 @@ mod prompt {
             }
         };
 
-        let methodology =
-            read_or_default(&pack::methodology_path(template_dir), pack::METHODOLOGY)?;
+        let methodology = read_or_default(&pack::methodology_path(template_dir), "")?;
         let output_schema = minify_schema(&pack::output_schema_path(template_dir))?;
 
         let mut slots = HashMap::new();
@@ -144,7 +143,7 @@ mod prompt {
     }
 
     fn minify_schema(path: &Path) -> Result<String, std::io::Error> {
-        let text = read_or_default(path, pack::OUTPUT_SCHEMA)?;
+        let text = read_or_default(path, "")?;
         match serde_json::from_str::<serde_json::Value>(&text) {
             Ok(v) => Ok(v.to_string()),
             Err(e) => {
@@ -175,7 +174,7 @@ mod prompt {
         #[test]
         fn builds_all_nine_prompt_slots() {
             let dir = tempdir().unwrap();
-            pack::write_default_pack(dir.path()).unwrap();
+            crate::testutil::copy_default_pack(dir.path());
             let wd = tempdir().unwrap();
             let slots = build_prompt_slots(
                 &input_with(wd.path().to_str().unwrap()),
@@ -212,7 +211,7 @@ mod prompt {
         #[test]
         fn change_context_formats_bullets() {
             let dir = tempdir().unwrap();
-            pack::write_default_pack(dir.path()).unwrap();
+            crate::testutil::copy_default_pack(dir.path());
             let wd = tempdir().unwrap();
             let mut input = input_with(wd.path().to_str().unwrap());
             input.change_context = Some(ChangeContext {
@@ -232,7 +231,7 @@ mod prompt {
         #[test]
         fn discovery_used_when_target_absent() {
             let pack_dir = tempdir().unwrap();
-            pack::write_default_pack(pack_dir.path()).unwrap();
+            crate::testutil::copy_default_pack(pack_dir.path());
             let wd = tempdir().unwrap();
             std::fs::write(wd.path().join("a.rs"), "fn a() {}").unwrap();
             let mut input = input_with(wd.path().to_str().unwrap());
@@ -244,7 +243,7 @@ mod prompt {
         #[test]
         fn dimensions_filter_with_some_emits_only_clause() {
             let pack_dir = tempdir().unwrap();
-            pack::write_default_pack(pack_dir.path()).unwrap();
+            crate::testutil::copy_default_pack(pack_dir.path());
             let wd = tempdir().unwrap();
             let mut input = input_with(wd.path().to_str().unwrap());
             input.options.include_dimensions = Some(vec![Dimension::Design, Dimension::Tests]);

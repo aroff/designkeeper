@@ -13,6 +13,7 @@ cd "$ROOT"
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features "$@"
+cargo build --bin dk
 
 # ---------------------------------------------------------------------------
 # 2. CLI smoke tests
@@ -56,6 +57,9 @@ note "init + install + doctor"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+# Use an empty manifest so init/install don't fail on placeholder sources (Stage 4 not yet landed).
+printf 'packs = []\n' > "$WORK/dk-templates.toml"
+
 assert_rc 0 "init --agent codex" \
   -- bash -c 'cd "$1" && "$2" init --agent codex --model gpt-5' _ "$WORK" "$BIN"
 [ -f "$WORK/dk.toml" ] \
@@ -63,8 +67,16 @@ assert_rc 0 "init --agent codex" \
 grep -q 'agent = "codex"' "$WORK/dk.toml" \
   && ok "dk.toml records agent" || bad "dk.toml records agent"
 
-assert_rc 0 "install (embedded fallback)" \
-  -- bash -c 'cd "$1" && "$2" install' _ "$WORK" "$BIN"
+# Stage 4 not yet landed: test that a bad source fails with DK_PACK_INSTALL_FAILED.
+assert_rc 1 "install with invalid source fails" \
+  -- bash -c 'cd "$1" && "$2" install not-a-real/repo-xyz' _ "$WORK" "$BIN"
+assert_contains "DK_PACK_INSTALL_FAILED" "install invalid source emits DK_PACK_INSTALL_FAILED" \
+  -- bash -c 'cd "$1" && "$2" install not-a-real/repo-xyz 2>&1' _ "$WORK" "$BIN"
+
+# Set up packs manually from repo templates (until real sources land in Stage 4).
+mkdir -p "$WORK/.dk/packs"
+cp -r "$ROOT/templates/default"    "$WORK/.dk/packs/default"
+cp -r "$ROOT/templates/structural" "$WORK/.dk/packs/structural"
 [ -d "$WORK/.dk/packs/default" ] \
   && ok "install created .dk/packs/default" || bad "install created .dk/packs/default"
 [ -f "$WORK/.dk/packs/default/templates/review.md" ] \
@@ -102,7 +114,7 @@ assert_rc 1 "review --template structural with missing agent fails" \
 note "pack-not-found"
 assert_rc 1 "review with unknown template fails" \
   -- bash -c 'cd "$1" && "$2" review --template nonexistent-pack .' _ "$WORK" "$BIN"
-assert_contains "DK_PACK_NOT_FOUND" "review unknown template emits DK_PACK_NOT_FOUND" \
+assert_contains "DK_PACK_NOT_INSTALLED" "review unknown template emits DK_PACK_NOT_INSTALLED" \
   -- bash -c 'cd "$1" && "$2" review --template nonexistent-pack . 2>&1' _ "$WORK" "$BIN"
 
 note "mcp serve (stdio) exposes review as a tool"

@@ -104,7 +104,7 @@ fn findings_summary(output: &ReviewOutput) -> String {
 mod tests {
     use super::*;
     use crate::config::default_config;
-    use crate::pack;
+    use crate::testutil::copy_default_pack;
     use std::path::PathBuf;
     use tempfile::tempdir;
 
@@ -117,7 +117,7 @@ mod tests {
 
     fn setup() -> (tempfile::TempDir, tempfile::TempDir) {
         let pack_dir = tempdir().unwrap();
-        pack::write_default_pack(pack_dir.path()).unwrap();
+        copy_default_pack(pack_dir.path());
         let wd = tempdir().unwrap();
         (pack_dir, wd)
     }

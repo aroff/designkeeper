@@ -13,11 +13,11 @@ External dependencies worth knowing:
 
 ## Glossary
 
-**Template pack** — a directory with a fixed layout (`templates/review.md`, `templates/methodology.md`, `reports/review.md`, `schemas/review-input.json`, `schemas/review.json`) plus an `aikit.toml` manifest. Installed under `.dk/packs/{name}/` (project-local) or `~/.dk/packs/{name}/` (global). The two built-in packs (`default`, `structural`) are embedded in the binary as fallbacks.
+**Template pack** — a directory with a fixed layout (`templates/review.md`, `templates/methodology.md`, `reports/review.md`, `schemas/review-input.json`, `schemas/review.json`) plus an `aikit.toml` manifest. Installed under `.dk/packs/{name}/` (project-local) or `~/.dk/packs/{name}/` (global). The two official packs (`default`, `structural`) are fetched from `aroff/designkeeper/templates/` on `dk install`.
 
 **`dk-templates.toml`** — the official pack manifest at the repo root, embedded in the binary. Lists pack names and their GitHub sources. `dk init` and `dk install` (with no args) read this to know what to fetch.
 
-**Pack resolution order** — project-local → global → embedded fallback (for `default`/`structural`) → `DK_PACK_NOT_FOUND`.
+**Pack resolution order** — project-local → global → `DK_PACK_NOT_INSTALLED`.
 
 **`--template`** — required flag on `dk review` and `dk check`. No default; the user always names the pack explicitly.
 
@@ -76,6 +76,6 @@ Add a smoke assertion in `scripts/run-tests.sh` whenever you add a new subcomman
 1. Create `templates/{name}/` with the layout above.
 2. Add an `aikit.toml` with `[package] name`, `version`, `description`.
 3. Add an entry to `dk-templates.toml` at the repo root.
-4. Add `include_str!` constants to `crates/dk-core/src/pack.rs` and a `write_{name}_pack` function.
-5. Add the embedded fallback branch to `pack_store::write_embedded_pack_to_temp` and `init::write_embedded_fallback`.
+4. Add an entry to `dk-templates.toml` at the repo root.
+5. No embedded fallback is needed; add only the `templates/{name}/` directory, an entry in `dk-templates.toml`, and smoke-test assertions in `scripts/run-tests.sh`.
 6. Update smoke tests in `scripts/run-tests.sh`.

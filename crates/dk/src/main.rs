@@ -21,8 +21,7 @@ use dk_core::{pack_store, review, run_check};
 use dk_core::{run_init, InitParams};
 
 use input::{
-    current_dir, effective_sarif_path, emit, flag, output_format, prompt_or_default,
-    resolve_common_args,
+    current_dir, effective_sarif_path, emit, flag, prompt_or_default, resolve_common_args,
 };
 use progress::{fail, ProgressReporter};
 
@@ -326,7 +325,7 @@ fn run_review_cmd(args: CommandArgs) -> anyhow::Result<()> {
         Err(e) => fail(e.code(), &e.to_string()),
     };
 
-    let format = output_format(&args, &c.config);
+    let format = c.output_format;
 
     // Build SARIF before the primary emit so we can reuse output.
     let sarif_path = effective_sarif_path(&args, &c.config);
@@ -458,23 +457,11 @@ fn run_install_cmd(args: CommandArgs) -> anyhow::Result<()> {
         }
     } else {
         let manifest = dk_core::DkTemplatesManifest::resolve(&cwd);
-        let mut any = false;
         for entry in &manifest.packs {
-            match pack_store::install_pack_or_embedded_fallback(entry, &dest_base, scope.clone()) {
-                Ok(Some(p)) => {
-                    print_installed(&p);
-                    any = true;
-                }
-                Ok(None) => {
-                    eprintln!("  ! skipped {} (no source or fallback)", entry.name);
-                }
-                Err(e) => {
-                    fail(e.code(), &e.to_string());
-                }
+            match pack_store::install_pack(&entry.source, &dest_base, scope.clone()) {
+                Ok(p) => print_installed(&p),
+                Err(e) => fail(e.code(), &e.to_string()),
             }
-        }
-        if !any {
-            eprintln!("No packs could be installed. Check dk-templates.toml sources.");
         }
     }
     Ok(())
