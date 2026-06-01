@@ -1,6 +1,4 @@
-# Google Engineering Practices
-
-Google's codified best practices for code review — the collective experience of how to review code and how to get your code through review.
+Design Keeper
 
 ## Language
 
