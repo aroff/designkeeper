@@ -306,7 +306,12 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ needs.verify-version.outputs.version }}"
-          BRANCH="ci/release-designkeeper-v${VERSION}-${{ github.run_id }}"
+          # Include run_attempt so re-runs get a fresh branch. run_id alone is
+          # stable across re-runs of the same run, so the validate-run lookup
+          # below ("select headBranch == $BRANCH") would match the previous
+          # attempt's stale (failed) run and short-circuit on it instead of the
+          # newly triggered one.
+          BRANCH="ci/release-designkeeper-v${VERSION}-${{ github.run_id }}-${{ github.run_attempt }}"
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
 
           cd homebrew-cli
