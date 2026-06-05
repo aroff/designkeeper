@@ -15,6 +15,7 @@ use cli_framework::doctor::DoctorModule;
 use cli_framework::mcp::McpToolExportPolicy;
 use cli_framework::prelude::*;
 use cli_framework::spec::arg_spec::{ArgKind, ArgValueType, Cardinality};
+use cli_framework::spec::command_tree::GroupMetadata;
 
 use dk_core::config::{default_config, resolve_config, OutputFormat};
 use dk_core::PackScope;
@@ -39,6 +40,9 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
+    let packs_path = CommandPath::root_for("packs");
+    let packs_list_path = CommandPath::new(&["packs", "list"]).expect("valid path");
+
     let app = AppBuilder::new()
         .with_version("dk", env!("CARGO_PKG_VERSION"))
         // Only commands flagged `expose_mcp` are surfaced as MCP tools by
@@ -48,6 +52,11 @@ async fn main() -> anyhow::Result<()> {
         .register_command(check_command())?
         .register_command(init_command())?
         .register_command(install_command())?
+        .register_group(&packs_path, GroupMetadata {
+            summary: "Manage template packs",
+            hidden: false,
+        })?
+        .register_command_at(&packs_list_path, packs_list_command())?
         .register_module(DoctorModule::new(doctor::checks()))?
         .build(DkContext)?;
     let mut app = app;
@@ -447,6 +456,67 @@ fn run_install_cmd(args: HashMap<String, ArgValue>) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn packs_list_command() -> Command {
+    let args = vec![flag_spec("json", None, "Emit machine-readable JSON array")];
+    Command {
+        id: Arc::from("list"),
+        spec: Arc::new(CommandSpec {
+            summary: "List installed template packs",
+            syntax: Some("packs list [--json]"),
+            category: Some("setup"),
+            args,
+            ..Default::default()
+        }),
+        validator: None,
+        expose_mcp: true,
+        expose_chat: false,
+        execute: Arc::new(|_ctx, args| Box::pin(async move { run_packs_list_cmd(args) })),
+    }
+}
+
+fn run_packs_list_cmd(args: HashMap<String, ArgValue>) -> anyhow::Result<()> {
+    let cwd = current_dir();
+    let packs = pack_store::list_packs(&cwd);
+
+    if flag(&args, "json") {
+        let json: Vec<serde_json::Value> = packs
+            .iter()
+            .map(|p| {
+                serde_json::json!({
+                    "name": p.name,
+                    "scope": p.scope.to_string(),
+                    "path": p.path.display().to_string(),
+                    "description": p.description,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&json)?);
+        return Ok(());
+    }
+
+    if packs.is_empty() {
+        println!("No packs installed. Run 'dk init' to install official packs.");
+        return Ok(());
+    }
+
+    let name_w = packs.iter().map(|p| p.name.len()).max().unwrap_or(4).max(4);
+    let scope_w = 7usize; // "project" is the longest scope
+    println!(
+        "{:<name_w$}  {:<scope_w$}  {}",
+        "NAME", "SCOPE", "DESCRIPTION"
+    );
+    for p in &packs {
+        let desc = p.description.as_deref().unwrap_or("-");
+        println!(
+            "{:<name_w$}  {:<scope_w$}  {}",
+            p.name,
+            p.scope.to_string(),
+            desc
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -566,5 +636,16 @@ mod tests {
         ] {
             assert!(names.contains(&expected), "common_args missing {expected}");
         }
+    }
+
+    #[test]
+    fn packs_list_is_mcp_exposed_and_not_chat_exposed() {
+        let cmd = packs_list_command();
+        assert_eq!(cmd.id.as_ref(), "list");
+        assert!(cmd.expose_mcp, "packs list must be surfaced as an MCP tool");
+        assert!(!cmd.expose_chat, "packs list must not appear in chat tool list");
+        assert_eq!(cmd.category(), Some("setup"));
+        let names = arg_names(&cmd);
+        assert!(names.contains(&"json"), "packs list must have --json flag");
     }
 }

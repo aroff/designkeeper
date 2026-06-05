@@ -91,6 +91,8 @@ pub struct InstalledPack {
     pub name: String,
     pub path: PathBuf,
     pub scope: PackScope,
+    /// First non-empty line of `templates/methodology.md`, if present.
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,14 +173,27 @@ pub fn install_pack(
         .unwrap_or("unknown")
         .to_string();
 
+    let description = read_pack_description(&pack_dir);
     Ok(InstalledPack {
         name,
         path: pack_dir,
         scope,
+        description,
     })
 }
 
 // ---- Listing ----
+
+/// Read the first non-empty, non-heading line from `templates/methodology.md` as a description.
+fn read_pack_description(pack_dir: &Path) -> Option<String> {
+    let path = pack::methodology_path(pack_dir);
+    let content = std::fs::read_to_string(path).ok()?;
+    content
+        .lines()
+        .map(|l| l.trim_start_matches('#').trim())
+        .find(|l| !l.is_empty())
+        .map(|s| s.to_string())
+}
 
 fn collect_packs_in(packs_dir: &Path, scope: PackScope) -> Vec<InstalledPack> {
     if !packs_dir.is_dir() {
@@ -193,10 +208,15 @@ fn collect_packs_in(packs_dir: &Path, scope: PackScope) -> Vec<InstalledPack> {
             e.file_type().map(|t| t.is_dir()).unwrap_or(false)
                 && pack::prompt_path(&e.path()).is_file()
         })
-        .map(|e| InstalledPack {
-            name: e.file_name().to_string_lossy().into_owned(),
-            path: e.path(),
-            scope: scope.clone(),
+        .map(|e| {
+            let path = e.path();
+            let description = read_pack_description(&path);
+            InstalledPack {
+                name: e.file_name().to_string_lossy().into_owned(),
+                path,
+                scope: scope.clone(),
+                description,
+            }
         })
         .collect()
 }
@@ -250,5 +270,20 @@ mod tests {
         assert_eq!(packs.len(), 1);
         assert_eq!(packs[0].name, "my-pack");
         assert_eq!(packs[0].scope, PackScope::Project);
+        assert!(packs[0].description.is_none()); // no methodology.md written
+    }
+
+    #[test]
+    fn list_packs_reads_description_from_methodology() {
+        let dir = tempdir().unwrap();
+        let pack_dir = dir.path().join(".dk").join("packs").join("my-pack");
+        let prompt = pack::prompt_path(&pack_dir);
+        let methodology = pack::methodology_path(&pack_dir);
+        std::fs::create_dir_all(prompt.parent().unwrap()).unwrap();
+        std::fs::write(&prompt, "# prompt").unwrap();
+        std::fs::write(&methodology, "# My Pack Title\n\nThe actual description line.").unwrap();
+
+        let packs = list_packs(dir.path());
+        assert_eq!(packs[0].description.as_deref(), Some("My Pack Title"));
     }
 }
