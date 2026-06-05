@@ -8,6 +8,7 @@ mod doctor;
 mod input;
 mod progress;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use cli_framework::doctor::DoctorModule;
@@ -62,13 +63,10 @@ fn opt(name: &'static str, short: Option<char>, help: &'static str) -> ArgSpec {
         name,
         kind: ArgKind::Option,
         short,
-        long: None,
         value_type: ArgValueType::String,
         cardinality: Cardinality::Optional,
-        default: None,
-        conflicts_with: vec![],
-        requires: vec![],
         help,
+        ..Default::default()
     }
 }
 
@@ -77,13 +75,10 @@ fn flag_spec(name: &'static str, short: Option<char>, help: &'static str) -> Arg
         name,
         kind: ArgKind::Flag,
         short,
-        long: None,
         value_type: ArgValueType::Bool,
         cardinality: Cardinality::Optional,
-        default: None,
-        conflicts_with: vec![],
-        requires: vec![],
         help,
+        ..Default::default()
     }
 }
 
@@ -91,14 +86,10 @@ fn int_opt(name: &'static str, help: &'static str) -> ArgSpec {
     ArgSpec {
         name,
         kind: ArgKind::Option,
-        short: None,
-        long: None,
         value_type: ArgValueType::Int,
         cardinality: Cardinality::Optional,
-        default: None,
-        conflicts_with: vec![],
-        requires: vec![],
         help,
+        ..Default::default()
     }
 }
 
@@ -106,14 +97,10 @@ fn positional_spec(name: &'static str, help: &'static str) -> ArgSpec {
     ArgSpec {
         name,
         kind: ArgKind::Positional,
-        short: None,
-        long: None,
         value_type: ArgValueType::String,
         cardinality: Cardinality::Optional,
-        default: None,
-        conflicts_with: vec![],
-        requires: vec![],
         help,
+        ..Default::default()
     }
 }
 
@@ -141,8 +128,6 @@ fn review_command() -> Command {
         ArgSpec {
             name: "focus",
             kind: ArgKind::Option,
-            short: None,
-            long: None,
             value_type: ArgValueType::Enum(vec![
                 "security",
                 "concurrency",
@@ -154,15 +139,14 @@ fn review_command() -> Command {
                 "ui",
             ]),
             cardinality: Cardinality::Repeated,
-            default: None,
-            conflicts_with: vec![],
-            requires: vec![],
             help: "Focus area (repeatable)",
+            ..Default::default()
         },
-        int_opt(
-            "max-findings",
-            "Maximum findings to emit (1-50, default 25)",
-        ),
+        ArgSpec {
+            min: Some(1),
+            max: Some(50),
+            ..int_opt("max-findings", "Maximum findings to emit (1-50, default 25)")
+        },
         opt(
             "sarif",
             None,
@@ -170,19 +154,18 @@ fn review_command() -> Command {
         ),
         positional_spec("path", "Path/glob root within the repo to focus the review"),
     ]);
-    let spec = CommandSpec {
-        summary: "Structured, agent-driven code review",
-        args,
-        ..Default::default()
-    };
     Command {
-        id: "review",
-        summary: "Structured, agent-driven code review",
-        syntax: Some("review [<path>] [--agent <a>] [--focus <area>]... [--output-format json]"),
-        category: Some("analysis"),
-        spec: Some(Arc::new(spec)),
+        id: Arc::from("review"),
+        spec: Arc::new(CommandSpec {
+            summary: "Structured, agent-driven code review",
+            syntax: Some("review [<path>] [--agent <a>] [--focus <area>]... [--output-format json]"),
+            category: Some("analysis"),
+            args,
+            ..Default::default()
+        }),
         validator: None,
         expose_mcp: true,
+        expose_chat: true,
         execute: Arc::new(|_ctx, args| Box::pin(async move { run_review_cmd(args) })),
     }
 }
@@ -203,19 +186,18 @@ fn check_command() -> Command {
         "path",
         "Path/glob root within the repo to focus the review",
     ));
-    let spec = CommandSpec {
-        summary: "Pass/fail review gate (verdict -> exit code)",
-        args,
-        ..Default::default()
-    };
     Command {
-        id: "check",
-        summary: "Pass/fail review gate (verdict -> exit code)",
-        syntax: Some("check [<path>] [--agent <a>] [--verbose]"),
-        category: Some("analysis"),
-        spec: Some(Arc::new(spec)),
+        id: Arc::from("check"),
+        spec: Arc::new(CommandSpec {
+            summary: "Pass/fail review gate (verdict -> exit code)",
+            syntax: Some("check [<path>] [--agent <a>] [--verbose]"),
+            category: Some("analysis"),
+            args,
+            ..Default::default()
+        }),
         validator: None,
         expose_mcp: false,
+        expose_chat: true,
         execute: Arc::new(|_ctx, args| Box::pin(async move { run_check_cmd(args) })),
     }
 }
@@ -225,19 +207,18 @@ fn init_command() -> Command {
         opt("agent", Some('a'), "Default agent key (e.g. claude, codex)"),
         opt("model", Some('m'), "Default model override (optional)"),
     ];
-    let spec = CommandSpec {
-        summary: "Install packs from dk-templates.toml and write dk.toml",
-        args,
-        ..Default::default()
-    };
     Command {
-        id: "init",
-        summary: "Install template packs and scaffold dk.toml",
-        syntax: Some("init [--agent <a>] [--model <m>]"),
-        category: Some("setup"),
-        spec: Some(Arc::new(spec)),
+        id: Arc::from("init"),
+        spec: Arc::new(CommandSpec {
+            summary: "Install template packs and scaffold dk.toml",
+            syntax: Some("init [--agent <a>] [--model <m>]"),
+            category: Some("setup"),
+            args,
+            ..Default::default()
+        }),
         validator: None,
         expose_mcp: false,
+        expose_chat: false,
         execute: Arc::new(|_ctx, args| {
             Box::pin(async move { tokio::task::block_in_place(|| run_init_cmd(args)) })
         }),
@@ -256,19 +237,18 @@ fn install_command() -> Command {
             "Pack source: owner/repo, URL, or local path. Omit to install all official packs.",
         ),
     ];
-    let spec = CommandSpec {
-        summary: "Install template packs from GitHub, a URL, or a local path",
-        args,
-        ..Default::default()
-    };
     Command {
-        id: "install",
-        summary: "Install template packs",
-        syntax: Some("install [--global] [<source>]"),
-        category: Some("setup"),
-        spec: Some(Arc::new(spec)),
+        id: Arc::from("install"),
+        spec: Arc::new(CommandSpec {
+            summary: "Install template packs from GitHub, a URL, or a local path",
+            syntax: Some("install [--global] [<source>]"),
+            category: Some("setup"),
+            args,
+            ..Default::default()
+        }),
         validator: None,
         expose_mcp: false,
+        expose_chat: false,
         execute: Arc::new(|_ctx, args| {
             Box::pin(async move { tokio::task::block_in_place(|| run_install_cmd(args)) })
         }),
@@ -311,7 +291,7 @@ fn print_installed(p: &dk_core::InstalledPack) {
     println!("✓ installed {} → {}", p.name, p.path.display());
 }
 
-fn run_review_cmd(args: CommandArgs) -> anyhow::Result<()> {
+fn run_review_cmd(args: HashMap<String, ArgValue>) -> anyhow::Result<()> {
     let c = resolve_common_args(&args);
 
     let reporter = ProgressReporter::new(&c.config.agent.agent);
@@ -374,7 +354,7 @@ fn run_review_cmd(args: CommandArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn run_check_cmd(args: CommandArgs) -> anyhow::Result<()> {
+fn run_check_cmd(args: HashMap<String, ArgValue>) -> anyhow::Result<()> {
     let c = resolve_common_args(&args);
     let verbose = flag(&args, "verbose");
 
@@ -395,14 +375,14 @@ fn run_check_cmd(args: CommandArgs) -> anyhow::Result<()> {
     std::process::exit(result.exit_code());
 }
 
-fn run_init_cmd(args: CommandArgs) -> anyhow::Result<()> {
+fn run_init_cmd(args: HashMap<String, ArgValue>) -> anyhow::Result<()> {
     let cwd = current_dir();
     let existing = resolve_config(&cwd).unwrap_or_else(|_| default_config());
 
-    let agent = prompt_or_default(args.named.get("agent"), "Agent", &existing.agent.agent);
+    let agent = prompt_or_default(args.get("agent"), "Agent", &existing.agent.agent);
     let model_default = existing.agent.model.as_deref().unwrap_or("");
     let model_raw = prompt_or_default(
-        args.named.get("model"),
+        args.get("model"),
         "Model (blank for none)",
         model_default,
     );
@@ -430,7 +410,7 @@ fn run_init_cmd(args: CommandArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn run_install_cmd(args: CommandArgs) -> anyhow::Result<()> {
+fn run_install_cmd(args: HashMap<String, ArgValue>) -> anyhow::Result<()> {
     let cwd = current_dir();
     let global = flag(&args, "global");
     let scope = if global {
@@ -450,7 +430,7 @@ fn run_install_cmd(args: CommandArgs) -> anyhow::Result<()> {
         cwd.join(".dk").join("packs")
     };
 
-    if let Some(source) = args.named.get("source") {
+    if let Some(ArgValue::Str(source)) = args.get("source") {
         match pack_store::install_pack(source, &dest_base, scope) {
             Ok(p) => print_installed(&p),
             Err(e) => fail(e.code(), &e.to_string()),
@@ -472,23 +452,17 @@ mod tests {
     use super::*;
 
     fn arg_names(cmd: &Command) -> Vec<&'static str> {
-        cmd.spec
-            .as_ref()
-            .expect("command has a spec")
-            .args
-            .iter()
-            .map(|a| a.name)
-            .collect()
+        cmd.spec.args.iter().map(|a| a.name).collect()
     }
 
     #[test]
     fn review_is_mcp_exposed_with_expected_args() {
         let cmd = review_command();
-        assert_eq!(cmd.id, "review");
+        assert_eq!(cmd.id.as_ref(), "review");
         assert!(cmd.expose_mcp, "review must be surfaced as an MCP tool");
-        assert_eq!(cmd.category, Some("analysis"));
+        assert_eq!(cmd.category(), Some("analysis"));
         assert!(
-            cmd.syntax.is_some(),
+            cmd.syntax().is_some(),
             "review should advertise a syntax line"
         );
         let names = arg_names(&cmd);
@@ -510,8 +484,8 @@ mod tests {
     #[test]
     fn review_focus_enumerates_every_focus_area() {
         let cmd = review_command();
-        let spec = cmd.spec.as_ref().unwrap();
-        let focus = spec
+        let focus = cmd
+            .spec
             .args
             .iter()
             .find(|a| a.name == "focus")
@@ -540,9 +514,22 @@ mod tests {
     }
 
     #[test]
+    fn max_findings_has_framework_bounds() {
+        let cmd = review_command();
+        let spec = cmd
+            .spec
+            .args
+            .iter()
+            .find(|a| a.name == "max-findings")
+            .expect("review has --max-findings");
+        assert_eq!(spec.min, Some(1), "--max-findings min should be 1");
+        assert_eq!(spec.max, Some(50), "--max-findings max should be 50");
+    }
+
+    #[test]
     fn check_is_not_mcp_exposed_and_has_verbose() {
         let cmd = check_command();
-        assert_eq!(cmd.id, "check");
+        assert_eq!(cmd.id.as_ref(), "check");
         assert!(!cmd.expose_mcp, "check must not become an MCP tool");
         assert!(arg_names(&cmd).contains(&"verbose"));
     }
@@ -550,12 +537,12 @@ mod tests {
     #[test]
     fn init_and_install_are_unexposed_setup_commands() {
         let init = init_command();
-        assert_eq!(init.id, "init");
+        assert_eq!(init.id.as_ref(), "init");
         assert!(!init.expose_mcp);
-        assert_eq!(init.category, Some("setup"));
+        assert_eq!(init.category(), Some("setup"));
 
         let install = install_command();
-        assert_eq!(install.id, "install");
+        assert_eq!(install.id.as_ref(), "install");
         assert!(!install.expose_mcp);
         let names = arg_names(&install);
         assert!(names.contains(&"global"), "install should have --global");
