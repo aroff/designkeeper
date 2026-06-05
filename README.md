@@ -28,7 +28,8 @@ Requires an agent CLI on your `PATH` (`claude` by default). Run `dk doctor` to v
 
 ```sh
 cd your-project
-dk init                                    # install template packs and write dk.toml
+dk packs init                              # install template packs and write dk.toml
+dk packs list                              # show installed packs and their descriptions
 dk review --template default src/          # Google eng-practices review
 dk review --template structural src/       # structural quality review
 dk check  --template default src/          # exit 0 = approve, 1 = request_changes/reject
@@ -85,16 +86,18 @@ A template pack defines the review rubric, prompt, output schema, and report for
 
 ### Installing packs
 
-`dk init` installs all official packs automatically from `dk-templates.toml`. To install packs manually:
+`dk packs init` installs all official packs automatically from `dk-templates.toml`. To install packs manually:
 
 ```sh
-dk install                          # install all official packs to .dk/packs/
-dk install --global                 # install to ~/.dk/packs/ (user-wide)
-dk install owner/repo               # install a single pack from GitHub
-dk install owner/repo@v1.2.0        # specific version
-dk install https://example.com/pack.zip
-dk install ./local-template-dir
+dk packs install                          # install all official packs to .dk/packs/
+dk packs install --global                 # install to ~/.dk/packs/ (user-wide)
+dk packs install owner/repo               # install a single pack from GitHub
+dk packs install owner/repo@v1.2.0        # specific version
+dk packs install https://example.com/pack.zip
+dk packs install ./local-template-dir
 ```
+
+> **Note:** `dk init` and `dk install` still work but are deprecated. They will be removed in a future release.
 
 Packs are resolved in this order: project-local (`.dk/packs/{name}/`) → global (`~/.dk/packs/{name}/`). If no pack is installed, `dk review` and `dk check` fail with `DK_PACK_NOT_INSTALLED`. Run `dk install` to fetch the official packs.
 
@@ -120,10 +123,11 @@ After `dk init`, edit `.dk/packs/default/templates/methodology.md` to tune the r
 
 | Command | Description |
 |---|---|
-| `dk init [--agent <a>] [--model <m>]` | Install template packs from `dk-templates.toml` and write `dk.toml`. Re-running is safe. |
-| `dk install [--global] [<source>]` | Install packs from GitHub, a URL, or a local path. |
 | `dk review --template <name> [<path>]` | Run a review; emit scored markdown or JSON report. |
 | `dk check --template <name> [<path>]` | Same pipeline, exit 0/1. Prints nothing by default; `-v` for the full report. Supports `--from-git`. |
+| `dk packs init [--agent <a>] [--model <m>]` | Install template packs from `dk-templates.toml` and write `dk.toml`. Re-running is safe. |
+| `dk packs install [--global] [<source>]` | Install packs from GitHub, a URL, or a local path. |
+| `dk packs list [--json]` | List installed packs with name, scope, and description. MCP-exposed as `dk_packs_list`. |
 | `dk doctor` | Check config, installed packs, and agent availability. |
 | `dk mcp serve` | Expose `dk` as an MCP tool (HTTP or stdio). |
 

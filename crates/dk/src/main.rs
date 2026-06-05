@@ -41,6 +41,8 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let packs_path = CommandPath::root_for("packs");
+    let packs_init_path = CommandPath::new(&["packs", "init"]).expect("valid path");
+    let packs_install_path = CommandPath::new(&["packs", "install"]).expect("valid path");
     let packs_list_path = CommandPath::new(&["packs", "list"]).expect("valid path");
 
     let app = AppBuilder::new()
@@ -50,13 +52,17 @@ async fn main() -> anyhow::Result<()> {
         .with_mcp_export_policy(McpToolExportPolicy::ExposeMcpOnly)
         .register_command(review_command())?
         .register_command(check_command())?
-        .register_command(init_command())?
-        .register_command(install_command())?
+        // packs group — canonical paths
         .register_group(&packs_path, GroupMetadata {
             summary: "Manage template packs",
             hidden: false,
         })?
+        .register_command_at(&packs_init_path, init_command())?
+        .register_command_at(&packs_install_path, install_command())?
         .register_command_at(&packs_list_path, packs_list_command())?
+        // deprecated root-level aliases (hidden, warn on use)
+        .register_command(deprecated_alias("init", "packs init", init_command()))?
+        .register_command(deprecated_alias("install", "packs install", install_command()))?
         .register_module(DoctorModule::new(doctor::checks()))?
         .build(DkContext)?;
     let mut app = app;
@@ -220,7 +226,7 @@ fn init_command() -> Command {
         id: Arc::from("init"),
         spec: Arc::new(CommandSpec {
             summary: "Install template packs and scaffold dk.toml",
-            syntax: Some("init [--agent <a>] [--model <m>]"),
+            syntax: Some("packs init [--agent <a>] [--model <m>]"),
             category: Some("setup"),
             args,
             ..Default::default()
@@ -250,7 +256,7 @@ fn install_command() -> Command {
         id: Arc::from("install"),
         spec: Arc::new(CommandSpec {
             summary: "Install template packs from GitHub, a URL, or a local path",
-            syntax: Some("install [--global] [<source>]"),
+            syntax: Some("packs install [--global] [<source>]"),
             category: Some("setup"),
             args,
             ..Default::default()
@@ -260,6 +266,34 @@ fn install_command() -> Command {
         expose_chat: false,
         execute: Arc::new(|_ctx, args| {
             Box::pin(async move { tokio::task::block_in_place(|| run_install_cmd(args)) })
+        }),
+    }
+}
+
+/// Wrap a command as a hidden, deprecated root-level alias.
+///
+/// The alias prints a warning to stderr naming the canonical path, then
+/// delegates to the inner command's execute closure unchanged.
+fn deprecated_alias(id: &'static str, canonical: &'static str, inner: Command) -> Command {
+    let inner_execute = Arc::clone(&inner.execute);
+    Command {
+        id: Arc::from(id),
+        spec: Arc::new(CommandSpec {
+            summary: inner.spec.summary,
+            hidden: true,
+            deprecated: Some("use the packs subcommand instead"),
+            args: inner.spec.args.clone(),
+            ..Default::default()
+        }),
+        validator: None,
+        expose_mcp: false,
+        expose_chat: false,
+        execute: Arc::new(move |ctx, args| {
+            eprintln!(
+                "warning: 'dk {id}' is deprecated and will be removed in a future release; \
+                 use 'dk {canonical}' instead"
+            );
+            (inner_execute)(ctx, args)
         }),
     }
 }
@@ -609,17 +643,39 @@ mod tests {
         let init = init_command();
         assert_eq!(init.id.as_ref(), "init");
         assert!(!init.expose_mcp);
+        assert!(!init.expose_chat);
         assert_eq!(init.category(), Some("setup"));
 
         let install = install_command();
         assert_eq!(install.id.as_ref(), "install");
         assert!(!install.expose_mcp);
+        assert!(!install.expose_chat);
         let names = arg_names(&install);
         assert!(names.contains(&"global"), "install should have --global");
         assert!(
             names.contains(&"source"),
             "install should have a source positional"
         );
+    }
+
+    #[test]
+    fn deprecated_aliases_are_hidden_and_not_exposed() {
+        for (id, canonical) in [("init", "packs init"), ("install", "packs install")] {
+            let inner = if id == "init" {
+                init_command()
+            } else {
+                install_command()
+            };
+            let alias = deprecated_alias(id, canonical, inner);
+            assert_eq!(alias.id.as_ref(), id);
+            assert!(!alias.expose_mcp, "{id} alias must not be MCP-exposed");
+            assert!(!alias.expose_chat, "{id} alias must not be chat-exposed");
+            assert!(alias.spec.hidden, "{id} alias must be hidden from --help");
+            assert!(
+                alias.spec.deprecated.is_some(),
+                "{id} alias must carry a deprecation message"
+            );
+        }
     }
 
     #[test]
