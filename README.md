@@ -120,10 +120,10 @@ After `dk init`, edit `.dk/packs/default/templates/methodology.md` to tune the r
 
 | Command | Description |
 |---|---|
-| `dk init` | Install template packs from `dk-templates.toml` and write `dk.toml`. Re-running is safe. |
+| `dk init [--agent <a>] [--model <m>]` | Install template packs from `dk-templates.toml` and write `dk.toml`. Re-running is safe. |
 | `dk install [--global] [<source>]` | Install packs from GitHub, a URL, or a local path. |
 | `dk review --template <name> [<path>]` | Run a review; emit scored markdown or JSON report. |
-| `dk check --template <name> [<path>]` | Same pipeline, exit 0/1. Prints nothing by default; `-v` for the full report. |
+| `dk check --template <name> [<path>]` | Same pipeline, exit 0/1. Prints nothing by default; `-v` for the full report. Supports `--from-git`. |
 | `dk doctor` | Check config, installed packs, and agent availability. |
 | `dk mcp serve` | Expose `dk` as an MCP tool (HTTP or stdio). |
 
@@ -143,6 +143,8 @@ After `dk init`, edit `.dk/packs/default/templates/methodology.md` to tune the r
 --model/-m <model>         model override
 --output-format <fmt>      markdown (default) or json
 --output-file <path>       write report to file
+--timeout <seconds>        agent timeout in seconds (0 = no timeout)
+--max-retries <n>          max retry attempts after first failure (default 2)
 --title <text>             changelist title (for PR context)
 --description <file|text>  changelist description
 --base-ref / --head-ref    git refs for diff context
@@ -152,6 +154,7 @@ After `dk init`, edit `.dk/packs/default/templates/methodology.md` to tune the r
                            performance, api_design, ui
 --max-findings <1-50>      cap findings (default: 25)
 --include-dimensions <...> comma-separated dimensions to grade
+--sarif <path>             also write a SARIF 2.1.0 report to this file
 ```
 
 ## Configuration
