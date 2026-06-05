@@ -66,8 +66,18 @@ _Avoid_: check in, check-in, commit, merge
 One of eight quality areas a **Reviewer** evaluates: Design, Functionality, Complexity, Tests, Naming, Comments, Style, Documentation.
 _Avoid_: review criteria, quality gate
 
+**Pack**:
+A self-contained directory bundling the review prompt template, rubric, output schema, and report layout for a specific review style. Packs are installed per-project (`.dk/packs/{name}/`) or globally (`~/.dk/packs/{name}/`). The canonical noun for this artefact.
+_Avoid_: template, template pack, review template (use Pack; "template" refers to the selector flag `--template`, not the artefact itself)
+
+**Workspace Init**:
+The one-shot command (`dk init`) that bootstraps dk for a project: configures agent and model, writes `dk.toml`, and installs the standard **Packs** as a convenience. Re-running is safe — already-installed Packs are skipped with a warning.
+_Avoid_: initialise packs, setup (too generic)
+
 ## Relationships
 
+- A **Pack** is selected by name via `--template` on `review` and `check`; the flag name is a legacy artifact — the artefact is a **Pack**.
+- **Workspace Init** installs standard **Packs** as a bundled convenience; additional Packs are managed independently via `dk packs install` / `dk packs remove`.
 - An **Author** writes a **CL** and provides a **CL Description**.
 - A **Reviewer** examines the **CL** against each **Review Dimension** and either grants LGTM or requests changes.
 - A **Nit** is a comment that does not block LGTM.

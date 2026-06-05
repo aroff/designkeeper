@@ -41,9 +41,9 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let packs_path = CommandPath::root_for("packs");
-    let packs_init_path = CommandPath::new(&["packs", "init"]).expect("valid path");
     let packs_install_path = CommandPath::new(&["packs", "install"]).expect("valid path");
     let packs_list_path = CommandPath::new(&["packs", "list"]).expect("valid path");
+    let packs_remove_path = CommandPath::new(&["packs", "remove"]).expect("valid path");
 
     let app = AppBuilder::new()
         .with_version("dk", env!("CARGO_PKG_VERSION"))
@@ -52,16 +52,16 @@ async fn main() -> anyhow::Result<()> {
         .with_mcp_export_policy(McpToolExportPolicy::ExposeMcpOnly)
         .register_command(review_command())?
         .register_command(check_command())?
-        // packs group — canonical paths
+        .register_command(init_command())?
+        // packs group
         .register_group(&packs_path, GroupMetadata {
             summary: "Manage template packs",
             hidden: false,
         })?
-        .register_command_at(&packs_init_path, init_command())?
         .register_command_at(&packs_install_path, install_command())?
         .register_command_at(&packs_list_path, packs_list_command())?
-        // deprecated root-level aliases (hidden, warn on use)
-        .register_command(deprecated_alias("init", "packs init", init_command()))?
+        .register_command_at(&packs_remove_path, packs_remove_command())?
+        // deprecated root-level alias for install
         .register_command(deprecated_alias("install", "packs install", install_command()))?
         .register_module(DoctorModule::new(doctor::checks()))?
         .build(DkContext)?;
@@ -226,7 +226,7 @@ fn init_command() -> Command {
         id: Arc::from("init"),
         spec: Arc::new(CommandSpec {
             summary: "Install template packs and scaffold dk.toml",
-            syntax: Some("packs init [--agent <a>] [--model <m>]"),
+            syntax: Some("init [--agent <a>] [--model <m>]"),
             category: Some("setup"),
             args,
             ..Default::default()
@@ -443,7 +443,10 @@ fn run_init_cmd(args: HashMap<String, ArgValue>) -> anyhow::Result<()> {
         "Created"
     };
     println!("{verb} {}", outcome.config_path.display());
-    if outcome.installed_packs.is_empty() {
+    for name in &outcome.skipped_packs {
+        eprintln!("warning: pack '{name}' already installed — skipping (use 'dk packs install' to reinstall)");
+    }
+    if outcome.installed_packs.is_empty() && outcome.skipped_packs.is_empty() {
         println!("No packs installed (check dk-templates.toml sources).");
     } else {
         for p in &outcome.installed_packs {
@@ -490,6 +493,69 @@ fn run_install_cmd(args: HashMap<String, ArgValue>) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn packs_remove_command() -> Command {
+    let args = vec![
+        positional_spec("name", "Name of the pack to remove"),
+        flag_spec(
+            "global",
+            Some('g'),
+            "Remove from ~/.dk/packs/ (user-global) instead of .dk/packs/",
+        ),
+    ];
+    Command {
+        id: Arc::from("remove"),
+        spec: Arc::new(CommandSpec {
+            summary: "Remove an installed pack",
+            syntax: Some("packs remove <name> [--global]"),
+            category: Some("setup"),
+            args,
+            ..Default::default()
+        }),
+        validator: None,
+        expose_mcp: false,
+        expose_chat: false,
+        execute: Arc::new(|_ctx, args| Box::pin(async move { run_packs_remove_cmd(args) })),
+    }
+}
+
+fn run_packs_remove_cmd(args: HashMap<String, ArgValue>) -> anyhow::Result<()> {
+    let name = match args.get("name") {
+        Some(ArgValue::Str(s)) => s.clone(),
+        _ => fail("DK_INPUT_VALIDATION", "--name is required"),
+    };
+    let global = flag(&args, "global");
+    let cwd = current_dir();
+
+    let pack_dir = if global {
+        pack_store::global_packs_dir()
+            .unwrap_or_else(|| fail("DK_IO_ERROR", "cannot determine home directory"))
+            .join(&name)
+    } else {
+        // Walk up from cwd to find the .dk dir, same as resolution order.
+        cwd.join(".dk").join("packs").join(&name)
+    };
+
+    if !pack_dir.exists() {
+        fail(
+            "DK_PACK_NOT_INSTALLED",
+            &format!("pack '{name}' is not installed"),
+        );
+    }
+
+    // Warn if this pack is listed in the manifest (standard pack).
+    let manifest = dk_core::DkTemplatesManifest::resolve(&cwd);
+    if manifest.packs.iter().any(|e| e.name == name) {
+        eprintln!(
+            "warning: '{name}' is a standard pack listed in dk-templates.toml; \
+             run 'dk packs install' to reinstall it"
+        );
+    }
+
+    std::fs::remove_dir_all(&pack_dir)?;
+    println!("removed pack '{name}' from {}", pack_dir.display());
+    Ok(())
+}
+
 fn packs_list_command() -> Command {
     let args = vec![flag_spec("json", None, "Emit machine-readable JSON array")];
     Command {
@@ -503,7 +569,7 @@ fn packs_list_command() -> Command {
         }),
         validator: None,
         expose_mcp: true,
-        expose_chat: false,
+        expose_chat: true,
         execute: Arc::new(|_ctx, args| Box::pin(async move { run_packs_list_cmd(args) })),
     }
 }
@@ -529,7 +595,7 @@ fn run_packs_list_cmd(args: HashMap<String, ArgValue>) -> anyhow::Result<()> {
     }
 
     if packs.is_empty() {
-        println!("No packs installed. Run 'dk init' to install official packs.");
+        println!("No packs installed. Run 'dk packs install' or 'dk init' to install official packs.");
         return Ok(());
     }
 
@@ -659,23 +725,25 @@ mod tests {
     }
 
     #[test]
-    fn deprecated_aliases_are_hidden_and_not_exposed() {
-        for (id, canonical) in [("init", "packs init"), ("install", "packs install")] {
-            let inner = if id == "init" {
-                init_command()
-            } else {
-                install_command()
-            };
-            let alias = deprecated_alias(id, canonical, inner);
-            assert_eq!(alias.id.as_ref(), id);
-            assert!(!alias.expose_mcp, "{id} alias must not be MCP-exposed");
-            assert!(!alias.expose_chat, "{id} alias must not be chat-exposed");
-            assert!(alias.spec.hidden, "{id} alias must be hidden from --help");
-            assert!(
-                alias.spec.deprecated.is_some(),
-                "{id} alias must carry a deprecation message"
-            );
-        }
+    fn deprecated_install_alias_is_hidden_and_not_exposed() {
+        let alias = deprecated_alias("install", "packs install", install_command());
+        assert_eq!(alias.id.as_ref(), "install");
+        assert!(!alias.expose_mcp, "install alias must not be MCP-exposed");
+        assert!(!alias.expose_chat, "install alias must not be chat-exposed");
+        assert!(alias.spec.hidden, "install alias must be hidden from --help");
+        assert!(alias.spec.deprecated.is_some(), "install alias must carry a deprecation message");
+    }
+
+    #[test]
+    fn packs_remove_is_not_exposed() {
+        let cmd = packs_remove_command();
+        assert_eq!(cmd.id.as_ref(), "remove");
+        assert!(!cmd.expose_mcp);
+        assert!(!cmd.expose_chat);
+        assert_eq!(cmd.category(), Some("setup"));
+        let names = arg_names(&cmd);
+        assert!(names.contains(&"name"));
+        assert!(names.contains(&"global"));
     }
 
     #[test]
@@ -695,11 +763,11 @@ mod tests {
     }
 
     #[test]
-    fn packs_list_is_mcp_exposed_and_not_chat_exposed() {
+    fn packs_list_is_mcp_and_chat_exposed() {
         let cmd = packs_list_command();
         assert_eq!(cmd.id.as_ref(), "list");
         assert!(cmd.expose_mcp, "packs list must be surfaced as an MCP tool");
-        assert!(!cmd.expose_chat, "packs list must not appear in chat tool list");
+        assert!(cmd.expose_chat, "packs list must be available in chat so agents can discover packs");
         assert_eq!(cmd.category(), Some("setup"));
         let names = arg_names(&cmd);
         assert!(names.contains(&"json"), "packs list must have --json flag");

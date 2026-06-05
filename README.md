@@ -28,7 +28,7 @@ Requires an agent CLI on your `PATH` (`claude` by default). Run `dk doctor` to v
 
 ```sh
 cd your-project
-dk packs init                              # install template packs and write dk.toml
+dk init                                    # configure agent/model, write dk.toml, install standard packs
 dk packs list                              # show installed packs and their descriptions
 dk review --template default src/          # Google eng-practices review
 dk review --template structural src/       # structural quality review
@@ -125,8 +125,9 @@ After `dk init`, edit `.dk/packs/default/templates/methodology.md` to tune the r
 |---|---|
 | `dk review --template <name> [<path>]` | Run a review; emit scored markdown or JSON report. |
 | `dk check --template <name> [<path>]` | Same pipeline, exit 0/1. Prints nothing by default; `-v` for the full report. Supports `--from-git`. |
-| `dk packs init [--agent <a>] [--model <m>]` | Install template packs from `dk-templates.toml` and write `dk.toml`. Re-running is safe. |
+| `dk init [--agent <a>] [--model <m>]` | One-shot workspace bootstrap: configure agent/model, write `dk.toml`, install standard packs. Already-installed packs are skipped with a warning. |
 | `dk packs install [--global] [<source>]` | Install packs from GitHub, a URL, or a local path. |
+| `dk packs remove <name> [--global]` | Remove an installed pack. Warns if it is a standard pack. |
 | `dk packs list [--json]` | List installed packs with name, scope, and description. MCP-exposed as `dk_packs_list`. |
 | `dk doctor` | Check config, installed packs, and agent availability. |
 | `dk mcp serve` | Expose `dk` as an MCP tool (HTTP or stdio). |

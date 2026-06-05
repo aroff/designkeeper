@@ -28,6 +28,8 @@ pub struct InitOutcome {
     pub dk_dir: PathBuf,
     pub config_path: PathBuf,
     pub installed_packs: Vec<InstalledPack>,
+    /// Packs that were already installed and skipped (not overwritten).
+    pub skipped_packs: Vec<String>,
     /// `true` if `dk.toml` already existed and was updated in place.
     pub updated_existing: bool,
 }
@@ -76,28 +78,40 @@ pub fn run_init(working_dir: &Path, params: &InitParams) -> Result<InitOutcome, 
     Ok(InitOutcome {
         dk_dir,
         config_path,
-        installed_packs,
+        installed_packs: installed_packs.installed,
+        skipped_packs: installed_packs.skipped,
         updated_existing,
     })
 }
 
-/// Install all packs listed in the manifest. Fetch failures are propagated as errors.
+struct InstallResult {
+    installed: Vec<InstalledPack>,
+    skipped: Vec<String>,
+}
+
+/// Install packs from the manifest, skipping any that are already present.
 fn install_packs_from_manifest(
     manifest: &DkTemplatesManifest,
     packs_dir: &Path,
-) -> Result<Vec<InstalledPack>, InitError> {
-    manifest
-        .packs
-        .iter()
-        .map(|entry| {
-            pack_store::install_pack(&entry.source, packs_dir, PackScope::Project).map_err(|e| {
-                InitError::InstallFailed {
+) -> Result<InstallResult, InitError> {
+    let mut installed = vec![];
+    let mut skipped = vec![];
+    for entry in &manifest.packs {
+        let pack_dir = packs_dir.join(&entry.name);
+        if crate::pack::prompt_path(&pack_dir).is_file() {
+            skipped.push(entry.name.clone());
+            continue;
+        }
+        let pack =
+            pack_store::install_pack(&entry.source, packs_dir, PackScope::Project).map_err(
+                |e| InitError::InstallFailed {
                     name: entry.name.clone(),
                     cause: e,
-                }
-            })
-        })
-        .collect()
+                },
+            )?;
+        installed.push(pack);
+    }
+    Ok(InstallResult { installed, skipped })
 }
 
 fn write_config(path: &Path, params: &InitParams) -> Result<(), InitError> {
@@ -146,6 +160,8 @@ mod tests {
         assert!(out.dk_dir.join("packs").is_dir());
         assert!(out.config_path.is_file());
         assert!(!out.updated_existing);
+        assert!(out.installed_packs.is_empty());
+        assert!(out.skipped_packs.is_empty());
     }
 
     #[test]
@@ -169,6 +185,27 @@ mod tests {
         let cfg = crate::config::resolve_config(dir.path()).unwrap();
         assert_eq!(cfg.agent.agent, "gemini");
         assert_eq!(cfg.scan.extensions, vec![".rs"]);
+    }
+
+    #[test]
+    fn init_skips_already_installed_packs() {
+        let dir = tempdir().unwrap();
+        let manifest_toml =
+            "[[packs]]\nname = \"default\"\ndescription = \"d\"\nsource = \"unused\"\n";
+        std::fs::write(dir.path().join("dk-templates.toml"), manifest_toml).unwrap();
+        // Pre-install the pack by creating its prompt file.
+        let pack_dir = dir.path().join(".dk").join("packs").join("default");
+        let prompt = crate::pack::prompt_path(&pack_dir);
+        std::fs::create_dir_all(prompt.parent().unwrap()).unwrap();
+        std::fs::write(&prompt, "# prompt").unwrap();
+
+        let params = InitParams {
+            agent: "claude".to_string(),
+            model: None,
+        };
+        let out = run_init(dir.path(), &params).unwrap();
+        assert!(out.installed_packs.is_empty(), "should not reinstall");
+        assert_eq!(out.skipped_packs, vec!["default"]);
     }
 
     #[test]
