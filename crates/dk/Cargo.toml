@@ -14,7 +14,7 @@ path = "src/main.rs"
 dk-core = { path = "../dk-core" }
 aikit-sdk.workspace = true
 openssl.workspace = true
-cli-framework = { path = "../../../cli-framework", features = ["doctor", "mcp-server"] }
+cli-framework = { path = "../../../cli-framework", features = ["doctor", "mcp-server", "mcp-install"] }
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }

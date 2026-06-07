@@ -82,3 +82,52 @@ fn review_with_unknown_template_fails_before_invoking_an_agent() {
         "stderr should be a coded `dk` error, got: {stderr}"
     );
 }
+
+#[test]
+fn mcp_install_dry_run_exits_zero_and_prints_config() {
+    let out = run_in_empty_dir(&[
+        "mcp",
+        "install",
+        "--agent",
+        "cursor",
+        "--stdio",
+        "--dry-run",
+    ]);
+    assert!(
+        out.status.success(),
+        "dry-run should exit 0; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("mcp") && stdout.contains("serve") && stdout.contains("stdio"),
+        "dry-run output should contain mcp serve --transport stdio args, got: {stdout}"
+    );
+}
+
+#[test]
+fn mcp_help_lists_install_register_list_serve() {
+    let out = run_in_empty_dir(&["mcp", "--help"]);
+    assert!(
+        out.status.success(),
+        "mcp --help should exit 0; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    for cmd in ["install", "register", "list", "serve"] {
+        assert!(
+            stdout.contains(cmd),
+            "mcp --help should list `{cmd}`, got: {stdout}"
+        );
+    }
+}
+
+#[test]
+fn mcp_list_exits_zero() {
+    let out = run_in_empty_dir(&["mcp", "list"]);
+    assert!(
+        out.status.success(),
+        "mcp list should exit 0; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}

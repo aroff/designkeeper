@@ -130,7 +130,9 @@ After `dk init`, edit `.dk/packs/default/templates/methodology.md` to tune the r
 | `dk packs remove <name> [--global]` | Remove an installed pack. Warns if it is a standard pack. |
 | `dk packs list [--json]` | List installed packs with name, scope, and description. MCP-exposed as `dk_packs_list`. |
 | `dk doctor` | Check config, installed packs, and agent availability. |
-| `dk mcp serve` | Expose `dk` as an MCP tool (HTTP or stdio). |
+| `dk mcp serve` | Expose `dk` as an MCP tool (HTTP or stdio). See [cli-mcp-serve.md](skill/references/cli-mcp-serve.md) for full install instructions. |
+| `dk mcp install [--agent <a>] [--stdio\|--url <u>]` | Register `dk` as an MCP server in a supported agent's config. |
+| `dk mcp list` | List supported MCP agent targets and their config file paths. |
 
 ### Verdicts and exit codes
 
