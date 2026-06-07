@@ -856,7 +856,7 @@ dependencies = [
 
 [[package]]
 name = "dk"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "aikit-sdk 0.3.0",
  "anyhow",
@@ -872,7 +872,7 @@ dependencies = [
 
 [[package]]
 name = "dk-core"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "aikit-sdk 0.3.0",
  "dirs 5.0.1",
