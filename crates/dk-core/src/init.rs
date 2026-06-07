@@ -102,13 +102,12 @@ fn install_packs_from_manifest(
             skipped.push(entry.name.clone());
             continue;
         }
-        let pack =
-            pack_store::install_pack(&entry.source, packs_dir, PackScope::Project).map_err(
-                |e| InitError::InstallFailed {
-                    name: entry.name.clone(),
-                    cause: e,
-                },
-            )?;
+        let pack = pack_store::install_pack(&entry.source, packs_dir, PackScope::Project).map_err(
+            |e| InitError::InstallFailed {
+                name: entry.name.clone(),
+                cause: e,
+            },
+        )?;
         installed.push(pack);
     }
     Ok(InstallResult { installed, skipped })

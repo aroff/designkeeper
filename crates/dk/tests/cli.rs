@@ -34,7 +34,7 @@ fn help_lists_the_core_commands() {
     let out = run_in_empty_dir(&["--help"]);
     assert!(out.status.success(), "exit status: {:?}", out.status);
     let stdout = String::from_utf8_lossy(&out.stdout);
-    for cmd in ["review", "check", "init", "install"] {
+    for cmd in ["review", "check", "init", "packs"] {
         assert!(
             stdout.contains(cmd),
             "help text should list `{cmd}`, got: {stdout}"

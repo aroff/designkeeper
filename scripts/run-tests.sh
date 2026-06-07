@@ -47,7 +47,7 @@ note "Top-level surface"
 assert_rc 0 "version"                               -- "$BIN" version
 assert_contains "dk 0"     "version prints semver"  -- "$BIN" version
 assert_contains "review"   "--help lists review"    -- "$BIN" --help
-assert_contains "install"  "--help lists install"   -- "$BIN" --help
+assert_contains "packs"    "--help lists packs"     -- "$BIN" --help
 assert_rc 0 "spec --format json"                    -- "$BIN" spec --format json
 assert_contains '"name": "dk"' "spec emits surface" -- "$BIN" spec --format json
 assert_rc 0 "completion bash"                       -- "$BIN" completion bash
@@ -69,9 +69,9 @@ grep -q 'agent = "codex"' "$WORK/dk.toml" \
 
 # Stage 4 not yet landed: test that a bad source fails with DK_PACK_INSTALL_FAILED.
 assert_rc 1 "install with invalid source fails" \
-  -- bash -c 'cd "$1" && "$2" install not-a-real/repo-xyz' _ "$WORK" "$BIN"
+  -- bash -c 'cd "$1" && "$2" packs install not-a-real/repo-xyz' _ "$WORK" "$BIN"
 assert_contains "DK_PACK_INSTALL_FAILED" "install invalid source emits DK_PACK_INSTALL_FAILED" \
-  -- bash -c 'cd "$1" && "$2" install not-a-real/repo-xyz 2>&1' _ "$WORK" "$BIN"
+  -- bash -c 'cd "$1" && "$2" packs install not-a-real/repo-xyz 2>&1' _ "$WORK" "$BIN"
 
 # Set up packs manually from repo templates (until real sources land in Stage 4).
 mkdir -p "$WORK/.dk/packs"
