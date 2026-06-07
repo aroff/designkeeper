@@ -281,7 +281,11 @@ mod tests {
         let methodology = pack::methodology_path(&pack_dir);
         std::fs::create_dir_all(prompt.parent().unwrap()).unwrap();
         std::fs::write(&prompt, "# prompt").unwrap();
-        std::fs::write(&methodology, "# My Pack Title\n\nThe actual description line.").unwrap();
+        std::fs::write(
+            &methodology,
+            "# My Pack Title\n\nThe actual description line.",
+        )
+        .unwrap();
 
         let packs = list_packs(dir.path());
         assert_eq!(packs[0].description.as_deref(), Some("My Pack Title"));

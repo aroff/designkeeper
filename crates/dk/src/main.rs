@@ -54,15 +54,16 @@ async fn main() -> anyhow::Result<()> {
         .register_command(check_command())?
         .register_command(init_command())?
         // packs group
-        .register_group(&packs_path, GroupMetadata {
-            summary: "Manage template packs",
-            hidden: false,
-        })?
+        .register_group(
+            &packs_path,
+            GroupMetadata {
+                summary: "Manage template packs",
+                hidden: false,
+            },
+        )?
         .register_command_at(&packs_install_path, install_command())?
         .register_command_at(&packs_list_path, packs_list_command())?
         .register_command_at(&packs_remove_path, packs_remove_command())?
-        // deprecated root-level alias for install
-        .register_command(deprecated_alias("install", "packs install", install_command()))?
         .register_module(DoctorModule::new(doctor::checks()))?
         .build(DkContext)?;
     let mut app = app;
@@ -160,7 +161,10 @@ fn review_command() -> Command {
         ArgSpec {
             min: Some(1),
             max: Some(50),
-            ..int_opt("max-findings", "Maximum findings to emit (1-50, default 25)")
+            ..int_opt(
+                "max-findings",
+                "Maximum findings to emit (1-50, default 25)",
+            )
         },
         opt(
             "sarif",
@@ -173,7 +177,9 @@ fn review_command() -> Command {
         id: Arc::from("review"),
         spec: Arc::new(CommandSpec {
             summary: "Structured, agent-driven code review",
-            syntax: Some("review [<path>] [--agent <a>] [--focus <area>]... [--output-format json]"),
+            syntax: Some(
+                "review [<path>] [--agent <a>] [--focus <area>]... [--output-format json]",
+            ),
             category: Some("analysis"),
             args,
             ..Default::default()
@@ -266,34 +272,6 @@ fn install_command() -> Command {
         expose_chat: false,
         execute: Arc::new(|_ctx, args| {
             Box::pin(async move { tokio::task::block_in_place(|| run_install_cmd(args)) })
-        }),
-    }
-}
-
-/// Wrap a command as a hidden, deprecated root-level alias.
-///
-/// The alias prints a warning to stderr naming the canonical path, then
-/// delegates to the inner command's execute closure unchanged.
-fn deprecated_alias(id: &'static str, canonical: &'static str, inner: Command) -> Command {
-    let inner_execute = Arc::clone(&inner.execute);
-    Command {
-        id: Arc::from(id),
-        spec: Arc::new(CommandSpec {
-            summary: inner.spec.summary,
-            hidden: true,
-            deprecated: Some("use the packs subcommand instead"),
-            args: inner.spec.args.clone(),
-            ..Default::default()
-        }),
-        validator: None,
-        expose_mcp: false,
-        expose_chat: false,
-        execute: Arc::new(move |ctx, args| {
-            eprintln!(
-                "warning: 'dk {id}' is deprecated and will be removed in a future release; \
-                 use 'dk {canonical}' instead"
-            );
-            (inner_execute)(ctx, args)
         }),
     }
 }
@@ -424,11 +402,7 @@ fn run_init_cmd(args: HashMap<String, ArgValue>) -> anyhow::Result<()> {
 
     let agent = prompt_or_default(args.get("agent"), "Agent", &existing.agent.agent);
     let model_default = existing.agent.model.as_deref().unwrap_or("");
-    let model_raw = prompt_or_default(
-        args.get("model"),
-        "Model (blank for none)",
-        model_default,
-    );
+    let model_raw = prompt_or_default(args.get("model"), "Model (blank for none)", model_default);
     let model = Some(model_raw).filter(|m| !m.trim().is_empty());
 
     let params = InitParams { agent, model };
@@ -595,16 +569,15 @@ fn run_packs_list_cmd(args: HashMap<String, ArgValue>) -> anyhow::Result<()> {
     }
 
     if packs.is_empty() {
-        println!("No packs installed. Run 'dk packs install' or 'dk init' to install official packs.");
+        println!(
+            "No packs installed. Run 'dk packs install' or 'dk init' to install official packs."
+        );
         return Ok(());
     }
 
     let name_w = packs.iter().map(|p| p.name.len()).max().unwrap_or(4).max(4);
     let scope_w = 7usize; // "project" is the longest scope
-    println!(
-        "{:<name_w$}  {:<scope_w$}  {}",
-        "NAME", "SCOPE", "DESCRIPTION"
-    );
+    println!("{:<name_w$}  {:<scope_w$}  DESCRIPTION", "NAME", "SCOPE");
     for p in &packs {
         let desc = p.description.as_deref().unwrap_or("-");
         println!(
@@ -725,16 +698,6 @@ mod tests {
     }
 
     #[test]
-    fn deprecated_install_alias_is_hidden_and_not_exposed() {
-        let alias = deprecated_alias("install", "packs install", install_command());
-        assert_eq!(alias.id.as_ref(), "install");
-        assert!(!alias.expose_mcp, "install alias must not be MCP-exposed");
-        assert!(!alias.expose_chat, "install alias must not be chat-exposed");
-        assert!(alias.spec.hidden, "install alias must be hidden from --help");
-        assert!(alias.spec.deprecated.is_some(), "install alias must carry a deprecation message");
-    }
-
-    #[test]
     fn packs_remove_is_not_exposed() {
         let cmd = packs_remove_command();
         assert_eq!(cmd.id.as_ref(), "remove");
@@ -767,7 +730,10 @@ mod tests {
         let cmd = packs_list_command();
         assert_eq!(cmd.id.as_ref(), "list");
         assert!(cmd.expose_mcp, "packs list must be surfaced as an MCP tool");
-        assert!(cmd.expose_chat, "packs list must be available in chat so agents can discover packs");
+        assert!(
+            cmd.expose_chat,
+            "packs list must be available in chat so agents can discover packs"
+        );
         assert_eq!(cmd.category(), Some("setup"));
         let names = arg_names(&cmd);
         assert!(names.contains(&"json"), "packs list must have --json flag");

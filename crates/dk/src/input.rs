@@ -149,8 +149,9 @@ pub fn map_input(
         Some(ArgValue::List(items)) => items
             .iter()
             .map(|v| match v {
-                ArgValue::Enum(s) | ArgValue::Str(s) => FocusArea::parse(s)
-                    .ok_or_else(|| format!("invalid --focus value: {s}")),
+                ArgValue::Enum(s) | ArgValue::Str(s) => {
+                    FocusArea::parse(s).ok_or_else(|| format!("invalid --focus value: {s}"))
+                }
                 _ => Err("invalid --focus value".to_string()),
             })
             .collect::<Result<Vec<_>, _>>()?,
@@ -220,10 +221,7 @@ pub fn flag(args: &HashMap<String, ArgValue>, name: &str) -> bool {
 }
 
 /// Return the effective SARIF output path: CLI flag takes precedence over config.
-pub fn effective_sarif_path(
-    args: &HashMap<String, ArgValue>,
-    config: &DkConfig,
-) -> Option<String> {
+pub fn effective_sarif_path(args: &HashMap<String, ArgValue>, config: &DkConfig) -> Option<String> {
     get_str(args, "sarif")
         .map(str::to_string)
         .or_else(|| config.output.sarif_path.clone())
@@ -399,10 +397,7 @@ mod tests {
 
     #[test]
     fn flag_detection() {
-        assert!(flag(
-            &args(&[("verbose", ArgValue::Bool(true))]),
-            "verbose"
-        ));
+        assert!(flag(&args(&[("verbose", ArgValue::Bool(true))]), "verbose"));
         assert!(!flag(&args(&[]), "verbose"));
     }
 
