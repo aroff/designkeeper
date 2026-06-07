@@ -338,7 +338,7 @@ fn run_review_cmd(args: HashMap<String, ArgValue>) -> anyhow::Result<()> {
                 agent_key: c.config.agent.agent.clone(),
                 model: c.config.agent.model.clone(),
             };
-            let sarif = dk_core::sarif::to_sarif(&output, &meta);
+            let sarif = dk_core::sarif::to_sarif(&output, &meta, &c.template_dir);
             Some(
                 serde_json::to_string_pretty(&sarif)
                     .unwrap_or_else(|e| fail("DK_IO_ERROR", &e.to_string())),
@@ -348,7 +348,7 @@ fn run_review_cmd(args: HashMap<String, ArgValue>) -> anyhow::Result<()> {
         };
 
     let rendered = match format {
-        OutputFormat::Json => serde_json::to_string_pretty(&output)
+        OutputFormat::Json => serde_json::to_string_pretty(output.raw())
             .unwrap_or_else(|e| fail("DK_IO_ERROR", &e.to_string())),
         OutputFormat::Markdown => match review::render_report(&output, &c.template_dir) {
             Ok(r) => r,

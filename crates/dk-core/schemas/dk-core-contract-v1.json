@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://designkeeper.dev/schemas/dk-core-contract/v1",
+  "type": "object",
+  "required": [
+    "summary",
+    "grades",
+    "overall_score",
+    "good_things",
+    "findings",
+    "limitations",
+    "suggested_next_steps"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "summary": {
+      "type": "object",
+      "required": ["verdict", "overall_score", "one_paragraph"],
+      "properties": {
+        "verdict": {
+          "type": "string",
+          "enum": ["approve", "approve_with_comments", "request_changes", "reject"]
+        },
+        "overall_score": { "type": "number", "minimum": 0, "maximum": 10 },
+        "one_paragraph": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    },
+    "grades": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/grade_entry" }
+    },
+    "overall_score": { "type": "number", "minimum": 0, "maximum": 10 },
+    "good_things": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } },
+    "limitations": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "suggested_next_steps": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 1
+    }
+  },
+  "$defs": {
+    "grade_entry": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["score", "rationale"],
+          "properties": {
+            "score": { "type": "number", "minimum": 0, "maximum": 10 },
+            "rationale": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["not_evaluated", "rationale"],
+          "properties": {
+            "not_evaluated": { "const": true },
+            "rationale": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "finding": {
+      "type": "object",
+      "required": [
+        "id",
+        "dimension",
+        "severity",
+        "location",
+        "observation",
+        "why_it_matters",
+        "recommended_action"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "dimension": { "type": "string" },
+        "severity": { "type": "string" },
+        "location": { "type": "string" },
+        "observation": { "type": "string" },
+        "why_it_matters": { "type": "string" },
+        "recommended_action": { "type": "string" },
+        "evidence": { "type": "string" },
+        "suggested_patch": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

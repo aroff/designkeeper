@@ -2,13 +2,14 @@
 //!
 //! Hosts the `dk review` / `dk check` orchestration: config resolution, file
 //! discovery, slot construction, the structured review pipeline (delegated to
-//! `aikit-sdk`), and domain-specific post-validation.
+//! `aikit-sdk`), and contract validation.
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod testutil;
 
 pub mod check;
 pub mod config;
+pub mod contract;
 pub mod discovery;
 pub mod git;
 pub mod init;
@@ -24,7 +25,7 @@ pub mod validation;
 pub use check::{run_check, CheckResult};
 pub use config::{
     default_config, find_up, resolve_config, AgentConfig, ConfigError, DkConfig, OutputConfig,
-    OutputFormat, ScanConfig, TemplatesConfig,
+    OutputFormat, ScanConfig,
 };
 pub use init::{run_init, InitError, InitOutcome, InitParams, PackSource};
 pub use pack_store::{
@@ -34,8 +35,6 @@ pub use pack_store::{
 pub use review::{build_agent_runner, run_review, Progress, ProgressFn, ReviewError};
 pub use sarif::SarifRunMeta;
 pub use types::{
-    ChangeContext, Dimension, Finding, FocusArea, GradeEntry, NotEvaluatedGrade, ProjectHints,
-    ReviewInput, ReviewOptions, ReviewOutput, ScoredGrade, Severity, Summary, Verdict,
-    DEFAULT_MAX_FINDINGS,
+    ChangeContext, Finding, GradeEntry, NotEvaluatedGrade, ProjectHints, ReviewDocument,
+    ReviewInput, ReviewOptions, ScoredGrade, Verdict, DEFAULT_MAX_FINDINGS,
 };
-pub use validation::{validate_output, ValidationWarning};

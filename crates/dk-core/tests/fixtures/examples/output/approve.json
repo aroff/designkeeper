@@ -2,76 +2,32 @@
   "summary": {
     "verdict": "approve",
     "overall_score": 8,
-    "one_paragraph": "The change improves ordering resilience with bounded retries and keeps scope focused on OrderProcessor. Tests cover failure paths. Minor nits on comment wording only."
+    "one_paragraph": "The change improves code quality with focused scope. Minor nit on comment wording only."
   },
   "grades": {
-    "overall_code_health": {
+    "alpha": {
       "score": 8,
-      "rationale": "Clearer failure handling without widening module boundaries."
+      "rationale": "Clean structure and clear separation of concerns."
     },
-    "cl_description": {
-      "score": 9,
-      "rationale": "Title and body state what, why, and idempotency tradeoff."
-    },
-    "change_scope": {
+    "beta": {
       "score": 8,
-      "rationale": "Single feature with tests in the same change; four files is reviewable."
-    },
-    "design": {
-      "score": 8,
-      "rationale": "Retry policy lives in the processor; callers unchanged."
-    },
-    "functionality": {
-      "score": 8,
-      "rationale": "Backoff caps and idempotency align with stated intent."
-    },
-    "complexity": {
-      "score": 7,
-      "rationale": "Retry helper is small; processor method still readable."
-    },
-    "tests": {
-      "score": 8,
-      "rationale": "Tests assert exhaustion and success after transient errors."
-    },
-    "naming": {
-      "score": 8,
-      "rationale": "RetryPolicy and max_attempts are self-explanatory."
-    },
-    "comments": {
-      "score": 7,
-      "rationale": "Why-backoff noted; one comment restates code."
-    },
-    "style": {
-      "score": 9,
-      "rationale": "Matches surrounding Rust style."
-    },
-    "consistency": {
-      "score": 8,
-      "rationale": "Error types consistent with crate patterns."
-    },
-    "documentation": {
-      "score": 7,
-      "rationale": "README mentions retry behavior; ADR link in PR body."
-    },
-    "context_and_review_depth": {
-      "score": 8,
-      "rationale": "Fits ordering module; no cross-boundary leaks."
+      "rationale": "Solid implementation with good test coverage."
     }
   },
   "overall_score": 8,
   "good_things": [
-    "Idempotency requirement called out in the CL description before review.",
-    "Tests use a fake clock for backoff without sleeping in CI."
+    "Clean implementation with focused scope.",
+    "Tests cover the main failure paths."
   ],
   "findings": [
     {
-      "id": "comments-001",
-      "dimension": "comments",
-      "severity": "nit",
+      "id": "alpha-001",
+      "dimension": "alpha",
+      "severity": "low",
       "location": "src/ordering/processor.rs:44",
-      "observation": "Comment '// retry with backoff' repeats the function name `retry_with_backoff`.",
-      "why_it_matters": "Comments should explain why, not restate identifiers (looking-for.md).",
-      "recommended_action": "Replace with why bounded backoff is used here or delete the comment."
+      "observation": "Comment restates the function name without adding context.",
+      "why_it_matters": "Comments should explain why, not restate identifiers.",
+      "recommended_action": "Replace with a why-comment or delete."
     }
   ],
   "limitations": [

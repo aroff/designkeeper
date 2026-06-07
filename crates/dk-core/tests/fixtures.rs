@@ -1,14 +1,14 @@
-//! Fixture-driven acceptance tests (spec §7, AC #14-#18 + smoke test).
+//! Fixture-driven acceptance tests for the Pack-agnostic review pipeline.
 //!
-//! Consumes the fixtures under `crates/dk-core/tests/fixtures/` and the schemas
-//! under `templates/default/schemas/`.
+//! All fixture packs use the synthetic `minimal` Pack (tests/fixtures/packs/minimal/).
+//! The default/structural templates are NOT referenced here.
 
 use std::path::{Path, PathBuf};
 
 use aikit_sdk::AgentRunner;
 use dk_core::config::default_config;
-use dk_core::testutil::copy_default_pack;
-use dk_core::{review, ReviewInput, ReviewOutput, Verdict};
+use dk_core::testutil::copy_fixture_pack;
+use dk_core::{review, ReviewDocument, ReviewInput, Verdict};
 use serde_json::Value;
 
 fn validate_json(schema: &Value, instance: &Value) -> Result<(), Vec<String>> {
@@ -59,25 +59,25 @@ fn read_json(rel: &str) -> Value {
     serde_json::from_str(&read_fixture(rel)).expect("valid json fixture")
 }
 
-fn templates_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../templates")
+fn minimal_pack_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packs/minimal")
 }
 
 fn input_schema() -> Value {
-    let path = templates_dir().join("default/schemas/review-input.json");
+    let path = minimal_pack_dir().join("schemas/review-input.json");
     let s =
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     serde_json::from_str(&s).expect("valid json schema")
 }
 
 fn output_schema() -> Value {
-    let path = templates_dir().join("default/schemas/review.json");
+    let path = minimal_pack_dir().join("schemas/review.json");
     let s =
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     serde_json::from_str(&s).expect("valid json schema")
 }
 
-// ---- AC #14 / #15: input fixtures pass input schema ----------------------
+// ---- Input fixtures pass minimal Pack input schema -----------------------
 
 #[test]
 fn minimal_input_passes_schema() {
@@ -97,7 +97,7 @@ fn invalid_input_fails_schema() {
     assert!(validate_json(&input_schema(), &instance).is_err());
 }
 
-// ---- AC-P2: suggested_patch > 2000 chars fails output schema ---------------
+// ---- suggested_patch > 2000 chars fails output schema --------------------
 
 #[test]
 fn suggested_patch_too_long_fails_output_schema() {
@@ -110,35 +110,40 @@ fn suggested_patch_too_long_fails_output_schema() {
     );
 }
 
-// ---- AC #16 / #17: output fixtures pass output schema --------------------
+// ---- Output fixtures pass minimal Pack output schema --------------------
 
 #[test]
 fn approve_output_passes_schema() {
     let instance = read_json("examples/output/approve.json");
     validate_json(&output_schema(), &instance).expect("approve.json should validate");
-    let typed: ReviewOutput = serde_json::from_value(instance).unwrap();
-    assert_eq!(typed.summary.verdict, Verdict::Approve);
+    let doc = ReviewDocument::from_value(instance);
+    assert_eq!(doc.verdict(), Some(Verdict::Approve));
 }
 
 #[test]
 fn request_changes_output_passes_schema() {
     let instance = read_json("examples/output/request-changes.json");
     validate_json(&output_schema(), &instance).expect("request-changes.json should validate");
-    let typed: ReviewOutput = serde_json::from_value(instance).unwrap();
-    assert_eq!(typed.summary.verdict, Verdict::RequestChanges);
-    assert!(typed.findings.iter().any(|f| f.id == "design-001"));
+    let doc = ReviewDocument::from_value(instance);
+    assert_eq!(doc.verdict(), Some(Verdict::RequestChanges));
+    assert_eq!(doc.findings().len(), 6);
+    // All findings use alpha/beta dimensions.
+    assert!(doc
+        .findings()
+        .iter()
+        .all(|f| f.dimension == "alpha" || f.dimension == "beta"));
 }
 
-// ---- AC #18: extraction from raw agent response --------------------------
+// ---- Extraction from raw agent response ----------------------------------
 
 #[test]
 fn extracts_and_parses_agent_response() {
     let raw = read_fixture("examples/agent-response/valid.md");
     let block = extract_json_block(&raw).expect("first ```json block");
-    let typed: ReviewOutput = serde_json::from_str(&block).expect("parses to ReviewOutput");
-    assert_eq!(typed.summary.verdict, Verdict::ApproveWithComments);
-    assert!((typed.overall_score - 7.0).abs() < f64::EPSILON);
-    let value: Value = serde_json::from_str(&block).unwrap();
+    let value: Value = serde_json::from_str(&block).expect("parses to JSON");
+    let doc = ReviewDocument::from_value(value.clone());
+    assert_eq!(doc.verdict(), Some(Verdict::ApproveWithComments));
+    assert!((doc.overall_score().unwrap() - 7.0).abs() < f64::EPSILON);
     validate_json(&output_schema(), &value).expect("extracted block validates");
 }
 
@@ -146,7 +151,7 @@ fn extracts_and_parses_agent_response() {
 
 fn pack_and_workdir() -> (tempfile::TempDir, tempfile::TempDir) {
     let pack_dir = tempfile::tempdir().unwrap();
-    copy_default_pack(pack_dir.path());
+    copy_fixture_pack("minimal", pack_dir.path());
     let wd = tempfile::tempdir().unwrap();
     std::fs::write(wd.path().join("lib.rs"), "pub fn x() {}").unwrap();
     (pack_dir, wd)
@@ -168,7 +173,7 @@ fn end_to_end_run_review_with_recorded_response() {
     let (pack_dir, wd) = pack_and_workdir();
     let raw = read_fixture("examples/agent-response/valid.md");
     let (runner, _) = AgentRunner::with_mock(vec![Ok(raw)]);
-    let output = review::run_review(
+    let doc = review::run_review(
         input_for(wd.path()),
         &default_config(),
         pack_dir.path(),
@@ -176,45 +181,13 @@ fn end_to_end_run_review_with_recorded_response() {
         &|_| {},
     )
     .expect("review succeeds");
-    assert_eq!(output.summary.verdict, Verdict::ApproveWithComments);
+    assert_eq!(doc.verdict(), Some(Verdict::ApproveWithComments));
 
-    let report = review::render_report(&output, pack_dir.path()).unwrap();
+    let report = review::render_report(&doc, pack_dir.path()).unwrap();
     assert!(report.contains("Code review grade report"));
     assert!(report.contains("documentation"));
     assert!(!report.contains("{{verdict}}"));
     assert!(!report.contains("{{grades_table}}"));
-}
-
-#[test]
-fn run_review_reconciles_score_mismatch() {
-    let (pack_dir, wd) = pack_and_workdir();
-    let mut value = read_json("examples/output/approve.json");
-    value["overall_score"] = serde_json::json!(2.0);
-    let raw = format!("```json\n{value}\n```");
-    let (runner, _) = AgentRunner::with_mock(vec![Ok(raw)]);
-    let output = review::run_review(
-        input_for(wd.path()),
-        &default_config(),
-        pack_dir.path(),
-        runner,
-        &|_| {},
-    )
-    .expect("reconciliation should not fail");
-    assert!(
-        (output.summary.overall_score - output.overall_score).abs() < 1e-9,
-        "scores must match after reconciliation: summary={} top_level={}",
-        output.summary.overall_score,
-        output.overall_score
-    );
-    let scored: Vec<f64> = output.grades.values().filter_map(|g| g.score()).collect();
-    assert!(!scored.is_empty());
-    let expected = (scored.iter().sum::<f64>() / scored.len() as f64 * 10.0).round() / 10.0;
-    assert!(
-        (output.summary.overall_score - expected).abs() < 0.01,
-        "reconciled score {:.1} should be close to mean {:.1}",
-        output.summary.overall_score,
-        expected
-    );
 }
 
 #[test]

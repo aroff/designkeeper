@@ -1,6 +1,7 @@
-//! SARIF 2.1.0 projection for `ReviewOutput`.
+//! SARIF 2.1.0 projection for `ReviewDocument`.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use serde_sarif::sarif::{
     ArtifactChange, ArtifactContent, ArtifactLocation, Fix, Invocation, Location, LogicalLocation,
@@ -9,7 +10,9 @@ use serde_sarif::sarif::{
     ToolComponent,
 };
 
-use crate::types::{Dimension, Finding, ReviewOutput, Severity};
+use crate::contract::ContractValidator;
+use crate::pack;
+use crate::types::{Finding, ReviewDocument};
 
 /// Metadata about the tool invocation; populated by the CLI crate.
 #[derive(Debug, Clone)]
@@ -20,12 +23,19 @@ pub struct SarifRunMeta {
     pub model: Option<String>,
 }
 
-/// Project a validated `ReviewOutput` into a SARIF 2.1.0 document.
+/// Project a validated `ReviewDocument` into a SARIF 2.1.0 document.
 ///
-/// Pure function — no I/O, no `Result`. Infallible given valid `ReviewOutput`.
-pub fn to_sarif(output: &ReviewOutput, meta: &SarifRunMeta) -> Sarif {
-    let rules = dimension_rules();
-    let results: Vec<SarifResult> = output.findings.iter().map(finding_to_result).collect();
+/// Rules are derived dynamically from the unique dimension strings in the
+/// document's findings. Severity levels are mapped from the Pack output schema
+/// (index 0 → error, index 1 → warning, rest → note).
+pub fn to_sarif(doc: &ReviewDocument, meta: &SarifRunMeta, pack_dir: &Path) -> Sarif {
+    let severity_order = read_severity_order(pack_dir);
+    let findings = doc.findings();
+    let rules = dimension_rules_from_findings(&findings);
+    let results: Vec<SarifResult> = findings
+        .iter()
+        .map(|f| finding_to_result(f, &severity_order))
+        .collect();
 
     // Build invocation with agent metadata in properties.
     let mut inv_props_map: BTreeMap<String, serde_json::Value> = BTreeMap::new();
@@ -42,24 +52,16 @@ pub fn to_sarif(output: &ReviewOutput, meta: &SarifRunMeta) -> Sarif {
         .build();
 
     // Build run.properties with verdict/score/grades.
-    let grades_json: serde_json::Map<String, serde_json::Value> = output
-        .grades
-        .iter()
-        .map(|(dim, grade)| {
-            (
-                dim.as_key(),
-                serde_json::to_value(grade).unwrap_or(serde_json::Value::Null),
-            )
-        })
-        .collect();
+    let grades_json: serde_json::Map<String, serde_json::Value> =
+        doc.raw()["grades"].as_object().cloned().unwrap_or_default();
     let mut run_props_map: BTreeMap<String, serde_json::Value> = BTreeMap::new();
     run_props_map.insert(
         "dk/verdict".to_string(),
-        serde_json::json!(output.summary.verdict.as_key()),
+        serde_json::json!(doc.verdict().map(|v| v.as_key()).unwrap_or("unknown")),
     );
     run_props_map.insert(
         "dk/overall_score".to_string(),
-        serde_json::json!(output.overall_score),
+        serde_json::json!(doc.overall_score().unwrap_or(0.0)),
     );
     run_props_map.insert(
         "dk/grades".to_string(),
@@ -94,25 +96,10 @@ pub fn to_sarif(output: &ReviewOutput, meta: &SarifRunMeta) -> Sarif {
         .build()
 }
 
-/// Build the `tool.driver.rules` array; one entry per Dimension variant (13 total).
-fn dimension_rules() -> Vec<ReportingDescriptor> {
-    use Dimension::*;
-
-    static RULES: &[(Dimension, &str)] = &[
-        (OverallCodeHealth, "Overall code health"),
-        (ClDescription, "CL description"),
-        (ChangeScope, "Change scope"),
-        (Design, "Design"),
-        (Functionality, "Functionality"),
-        (Complexity, "Complexity"),
-        (Tests, "Tests"),
-        (Naming, "Naming"),
-        (Comments, "Comments"),
-        (Style, "Style"),
-        (Consistency, "Consistency"),
-        (Documentation, "Documentation"),
-        (ContextAndReviewDepth, "Context and review depth"),
-    ];
+/// Collect unique dimension strings from findings and emit one SARIF rule per dimension.
+fn dimension_rules_from_findings(findings: &[Finding]) -> Vec<ReportingDescriptor> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut rules = Vec::new();
 
     let mut rule_props_map: BTreeMap<String, serde_json::Value> = BTreeMap::new();
     rule_props_map.insert("dk/category".to_string(), serde_json::json!("code-review"));
@@ -120,29 +107,40 @@ fn dimension_rules() -> Vec<ReportingDescriptor> {
         .additional_properties(rule_props_map)
         .build();
 
-    RULES
-        .iter()
-        .map(|(dim, label)| {
-            ReportingDescriptor::builder()
-                .id(dim.as_key())
+    for f in findings {
+        if seen.insert(f.dimension.clone()) {
+            let rule = ReportingDescriptor::builder()
+                .id(f.dimension.clone())
                 .short_description(
                     MultiformatMessageString::builder()
-                        .text(label.to_string())
+                        .text(f.dimension.clone())
                         .build(),
                 )
                 .properties(rule_props.clone())
-                .build()
-        })
-        .collect()
+                .build();
+            rules.push(rule);
+        }
+    }
+    rules
+}
+
+/// Map severity string to SARIF level using Pack schema order.
+/// Index 0 → Error, index 1 → Warning, anything else → Note.
+fn severity_to_level(severity: &str, order: &Option<Vec<String>>) -> ResultLevel {
+    if let Some(ord) = order {
+        match ord.iter().position(|s| s == severity) {
+            Some(0) => ResultLevel::Error,
+            Some(1) => ResultLevel::Warning,
+            _ => ResultLevel::Note,
+        }
+    } else {
+        ResultLevel::Warning
+    }
 }
 
 /// Project a single `Finding` into a SARIF `result`.
-fn finding_to_result(f: &Finding) -> SarifResult {
-    let level = match f.severity {
-        Severity::Blocker | Severity::Major => ResultLevel::Error,
-        Severity::Minor => ResultLevel::Warning,
-        Severity::Nit => ResultLevel::Note,
-    };
+fn finding_to_result(f: &Finding, severity_order: &Option<Vec<String>>) -> SarifResult {
+    let level = severity_to_level(&f.severity, severity_order);
 
     let message_text = format!("{}. {}", f.observation, f.why_it_matters);
     let message = Message::builder()
@@ -151,7 +149,7 @@ fn finding_to_result(f: &Finding) -> SarifResult {
         .build();
 
     // Stable fingerprint.
-    let stable_fp = stable_fingerprint(&f.dimension.as_key(), &f.location, &f.observation);
+    let stable_fp = stable_fingerprint(&f.dimension, &f.location, &f.observation);
 
     let mut fingerprints: BTreeMap<String, String> = BTreeMap::new();
     fingerprints.insert("dk/v1".to_string(), f.id.clone());
@@ -159,10 +157,7 @@ fn finding_to_result(f: &Finding) -> SarifResult {
 
     // Result properties.
     let mut props_map: BTreeMap<String, serde_json::Value> = BTreeMap::new();
-    props_map.insert(
-        "dk/severity".to_string(),
-        serde_json::json!(f.severity.as_key()),
-    );
+    props_map.insert("dk/severity".to_string(), serde_json::json!(f.severity));
 
     // Location handling.
     let (locations_vec, extra_props) = build_locations(f);
@@ -199,7 +194,7 @@ fn finding_to_result(f: &Finding) -> SarifResult {
 
     // Build base result then set optional fields directly on the struct.
     let mut result = SarifResult::builder()
-        .rule_id(f.dimension.as_key())
+        .rule_id(f.dimension.clone())
         .level(level)
         .kind(ResultKind::Open)
         .message(message)
@@ -237,8 +232,6 @@ fn build_locations(f: &Finding) -> (Vec<Location>, Vec<(String, serde_json::Valu
 /// Parse a physical location string (e.g. "src/foo.rs:42-48") into (uri, startLine, endLine).
 /// Returns `None` if the string does not match the physical location pattern.
 fn parse_physical_location(s: &str) -> Option<(String, u64, u64)> {
-    // Pattern: ^([^:]+):(\d+)(?:-(\d+))?$
-    // Must have exactly one ':' separating the file from the line part.
     let colon_pos = s.rfind(':')?;
     let file = &s[..colon_pos];
     let line_part = &s[colon_pos + 1..];
@@ -247,7 +240,6 @@ fn parse_physical_location(s: &str) -> Option<(String, u64, u64)> {
         return None;
     }
 
-    // line_part is either "NN" or "NN-MM"
     if let Some(dash_pos) = line_part.find('-') {
         let start_str = &line_part[..dash_pos];
         let end_str = &line_part[dash_pos + 1..];
@@ -260,13 +252,19 @@ fn parse_physical_location(s: &str) -> Option<(String, u64, u64)> {
     }
 }
 
-/// Compute the stable SHA-256 fingerprint from (dimension_key, location, observation).
+fn read_severity_order(pack_dir: &Path) -> Option<Vec<String>> {
+    let text = std::fs::read_to_string(pack::output_schema_path(pack_dir)).ok()?;
+    let schema: serde_json::Value = serde_json::from_str(&text).ok()?;
+    ContractValidator::severity_order(&schema)
+}
+
+/// Compute the stable SHA-256 fingerprint from (dimension, location, observation).
 /// Returns lowercase hex (64 chars).
-fn stable_fingerprint(dimension_key: &str, location: &str, observation: &str) -> String {
+fn stable_fingerprint(dimension: &str, location: &str, observation: &str) -> String {
     use sha2::Digest;
     let input = format!(
         "{}|{}|{}",
-        normalize(dimension_key),
+        normalize(dimension),
         normalize(location),
         normalize(observation)
     );
@@ -296,119 +294,27 @@ fn normalize(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::copy_fixture_pack;
+    use tempfile::tempdir;
 
     fn test_meta() -> SarifRunMeta {
         SarifRunMeta {
             tool_name: "dk".to_string(),
-            tool_version: "0.1.11".to_string(),
+            tool_version: "0.1.22".to_string(),
             agent_key: "claude".to_string(),
             model: Some("claude-opus-4-8".to_string()),
         }
     }
 
-    fn load_fixture(name: &str) -> ReviewOutput {
+    fn load_doc(name: &str) -> ReviewDocument {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/examples/output")
             .join(name);
         let text =
             std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {name}: {e}"));
-        serde_json::from_str(&text).unwrap_or_else(|e| panic!("cannot parse {name}: {e}"))
-    }
-
-    #[test]
-    fn test_dimension_rules_count() {
-        assert_eq!(dimension_rules().len(), 13);
-    }
-
-    #[test]
-    fn test_dimension_rules_ids_stable() {
-        let rules = dimension_rules();
-        let expected_ids = [
-            Dimension::OverallCodeHealth,
-            Dimension::ClDescription,
-            Dimension::ChangeScope,
-            Dimension::Design,
-            Dimension::Functionality,
-            Dimension::Complexity,
-            Dimension::Tests,
-            Dimension::Naming,
-            Dimension::Comments,
-            Dimension::Style,
-            Dimension::Consistency,
-            Dimension::Documentation,
-            Dimension::ContextAndReviewDepth,
-        ];
-        for (rule, dim) in rules.iter().zip(expected_ids.iter()) {
-            assert_eq!(rule.id, dim.as_key());
-        }
-    }
-
-    #[test]
-    fn test_severity_level_blocker() {
-        let f = Finding {
-            id: "x".to_string(),
-            dimension: Dimension::Design,
-            severity: Severity::Blocker,
-            location: "src/foo.rs:1".to_string(),
-            observation: "obs".to_string(),
-            why_it_matters: "why".to_string(),
-            recommended_action: "action".to_string(),
-            evidence: None,
-            suggested_patch: None,
-        };
-        let result = finding_to_result(&f);
-        assert_eq!(result.level, Some(ResultLevel::Error));
-    }
-
-    #[test]
-    fn test_severity_level_major() {
-        let f = Finding {
-            id: "x".to_string(),
-            dimension: Dimension::Design,
-            severity: Severity::Major,
-            location: "src/foo.rs:1".to_string(),
-            observation: "obs".to_string(),
-            why_it_matters: "why".to_string(),
-            recommended_action: "action".to_string(),
-            evidence: None,
-            suggested_patch: None,
-        };
-        let result = finding_to_result(&f);
-        assert_eq!(result.level, Some(ResultLevel::Error));
-    }
-
-    #[test]
-    fn test_severity_level_minor() {
-        let f = Finding {
-            id: "x".to_string(),
-            dimension: Dimension::Design,
-            severity: Severity::Minor,
-            location: "src/foo.rs:1".to_string(),
-            observation: "obs".to_string(),
-            why_it_matters: "why".to_string(),
-            recommended_action: "action".to_string(),
-            evidence: None,
-            suggested_patch: None,
-        };
-        let result = finding_to_result(&f);
-        assert_eq!(result.level, Some(ResultLevel::Warning));
-    }
-
-    #[test]
-    fn test_severity_level_nit() {
-        let f = Finding {
-            id: "x".to_string(),
-            dimension: Dimension::Comments,
-            severity: Severity::Nit,
-            location: "src/foo.rs:1".to_string(),
-            observation: "obs".to_string(),
-            why_it_matters: "why".to_string(),
-            recommended_action: "action".to_string(),
-            evidence: None,
-            suggested_patch: None,
-        };
-        let result = finding_to_result(&f);
-        assert_eq!(result.level, Some(ResultLevel::Note));
+        let value: serde_json::Value =
+            serde_json::from_str(&text).unwrap_or_else(|e| panic!("cannot parse {name}: {e}"));
+        ReviewDocument::from_value(value)
     }
 
     #[test]
@@ -431,10 +337,12 @@ mod tests {
 
     #[test]
     fn test_logical_location_passthrough() {
+        let pack_dir = tempdir().unwrap();
+        copy_fixture_pack("minimal", pack_dir.path());
         let f = Finding {
             id: "x".to_string(),
-            dimension: Dimension::ClDescription,
-            severity: Severity::Major,
+            dimension: "alpha".to_string(),
+            severity: "low".to_string(),
             location: "PR description".to_string(),
             observation: "obs".to_string(),
             why_it_matters: "why".to_string(),
@@ -442,30 +350,91 @@ mod tests {
             evidence: None,
             suggested_patch: None,
         };
-        let result = finding_to_result(&f);
+        let severity_order = read_severity_order(pack_dir.path());
+        let result = finding_to_result(&f, &severity_order);
         let locs = result.locations.as_ref().unwrap();
         let loc = &locs[0];
-        // Must have logicalLocations, not physicalLocation.
         assert!(loc.physical_location.is_none());
         let ll = loc.logical_locations.as_ref().unwrap();
         assert_eq!(ll[0].name.as_deref(), Some("PR description"));
     }
 
     #[test]
+    fn test_severity_level_schema_index_0_is_error() {
+        let pack_dir = tempdir().unwrap();
+        copy_fixture_pack("minimal", pack_dir.path());
+        let severity_order = read_severity_order(pack_dir.path());
+        // minimal pack has enum ["high","low"] — index 0 = high → error
+        let f = Finding {
+            id: "x".to_string(),
+            dimension: "alpha".to_string(),
+            severity: "high".to_string(),
+            location: "src/foo.rs:1".to_string(),
+            observation: "obs".to_string(),
+            why_it_matters: "why".to_string(),
+            recommended_action: "action".to_string(),
+            evidence: None,
+            suggested_patch: None,
+        };
+        let result = finding_to_result(&f, &severity_order);
+        assert_eq!(result.level, Some(ResultLevel::Error));
+    }
+
+    #[test]
+    fn test_severity_level_schema_index_1_is_warning() {
+        let pack_dir = tempdir().unwrap();
+        copy_fixture_pack("minimal", pack_dir.path());
+        let severity_order = read_severity_order(pack_dir.path());
+        // minimal pack has enum ["high","low"] — index 1 = low → warning
+        let f = Finding {
+            id: "x".to_string(),
+            dimension: "beta".to_string(),
+            severity: "low".to_string(),
+            location: "src/foo.rs:1".to_string(),
+            observation: "obs".to_string(),
+            why_it_matters: "why".to_string(),
+            recommended_action: "action".to_string(),
+            evidence: None,
+            suggested_patch: None,
+        };
+        let result = finding_to_result(&f, &severity_order);
+        assert_eq!(result.level, Some(ResultLevel::Warning));
+    }
+
+    #[test]
     fn test_fingerprint_stability() {
-        let fp1 = stable_fingerprint("design", "src/foo.rs:1", "some observation");
-        let fp2 = stable_fingerprint("design", "src/foo.rs:1", "some observation");
+        let fp1 = stable_fingerprint("alpha", "src/foo.rs:1", "some observation");
+        let fp2 = stable_fingerprint("alpha", "src/foo.rs:1", "some observation");
         assert_eq!(fp1, fp2);
         assert_eq!(fp1.len(), 64);
-        // Different inputs produce different fingerprints.
-        let fp3 = stable_fingerprint("tests", "src/foo.rs:1", "some observation");
+        let fp3 = stable_fingerprint("beta", "src/foo.rs:1", "some observation");
         assert_ne!(fp1, fp3);
     }
 
     #[test]
+    fn test_dimension_rules_dynamic_from_findings() {
+        let pack_dir = tempdir().unwrap();
+        copy_fixture_pack("minimal", pack_dir.path());
+        let doc = load_doc("approve.json");
+        let sarif = to_sarif(&doc, &test_meta(), pack_dir.path());
+        let run = &sarif.runs[0];
+        let rules = run
+            .tool
+            .driver
+            .rules
+            .as_ref()
+            .expect("rules should be present");
+        // approve.json has 1 finding with dimension "alpha"
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].id, "alpha");
+    }
+
+    #[test]
     fn test_to_sarif_approve_fixture() {
-        let output = load_fixture("approve.json");
-        let sarif = to_sarif(&output, &test_meta());
+        let pack_dir = tempdir().unwrap();
+        copy_fixture_pack("minimal", pack_dir.path());
+        let doc = load_doc("approve.json");
+        let sarif = to_sarif(&doc, &test_meta(), pack_dir.path());
         let run = &sarif.runs[0];
         let results = run.results.as_ref().unwrap();
         assert_eq!(results.len(), 1, "approve.json has exactly 1 finding");
@@ -473,8 +442,10 @@ mod tests {
 
     #[test]
     fn test_to_sarif_request_changes_fixture() {
-        let output = load_fixture("request-changes.json");
-        let sarif = to_sarif(&output, &test_meta());
+        let pack_dir = tempdir().unwrap();
+        copy_fixture_pack("minimal", pack_dir.path());
+        let doc = load_doc("request-changes.json");
+        let sarif = to_sarif(&doc, &test_meta(), pack_dir.path());
         let run = &sarif.runs[0];
         let results = run.results.as_ref().unwrap();
         assert_eq!(
@@ -496,8 +467,10 @@ mod tests {
             }
         };
         let schema_value: serde_json::Value = serde_json::from_str(&schema_text).unwrap();
-        let output = load_fixture("approve.json");
-        let sarif = to_sarif(&output, &test_meta());
+        let pack_dir = tempdir().unwrap();
+        copy_fixture_pack("minimal", pack_dir.path());
+        let doc = load_doc("approve.json");
+        let sarif = to_sarif(&doc, &test_meta(), pack_dir.path());
         let sarif_json = serde_json::to_value(&sarif).unwrap();
         let validator = jsonschema::validator_for(&schema_value).unwrap();
         let errors: Vec<_> = validator.iter_errors(&sarif_json).collect();

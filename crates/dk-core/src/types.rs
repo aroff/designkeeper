@@ -1,25 +1,12 @@
 //! Domain type definitions for the review pipeline.
 //!
-//! These are the stable public API types that mirror `schemas/input.schema.json`
-//! and `schemas/output.schema.json`. They have no dependency on orchestration code.
-
-use std::collections::BTreeMap;
+//! Pack-agnostic: no rubric dimension, severity, or focus-area enums.
+//! Only `Verdict` is a shared enum (part of the core contract and `dk check` exit semantics).
 
 use serde::{Deserialize, Serialize};
 
-fn parse_enum_from_str<T: serde::de::DeserializeOwned>(s: &str) -> Option<T> {
-    serde_json::from_value(serde_json::Value::String(s.trim().to_ascii_lowercase())).ok()
-}
-
-fn serde_key<T: serde::Serialize>(v: &T) -> String {
-    serde_json::to_value(v)
-        .ok()
-        .and_then(|val| val.as_str().map(String::from))
-        .unwrap_or_default()
-}
-
 // ---------------------------------------------------------------------------
-// Input types (mirror schemas/input.schema.json)
+// Input types
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -31,7 +18,7 @@ pub struct ReviewInput {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub change_context: Option<ChangeContext>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub focus: Vec<FocusArea>,
+    pub focus: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub project_hints: Option<ProjectHints>,
     #[serde(default)]
@@ -59,29 +46,6 @@ impl ChangeContext {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum FocusArea {
-    Security,
-    Concurrency,
-    Accessibility,
-    Internationalization,
-    Privacy,
-    Performance,
-    ApiDesign,
-    Ui,
-}
-
-impl FocusArea {
-    pub fn as_key(&self) -> String {
-        serde_key(self)
-    }
-
-    pub fn parse(s: &str) -> Option<Self> {
-        parse_enum_from_str(s)
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectHints {
@@ -106,7 +70,7 @@ pub const DEFAULT_MAX_FINDINGS: u8 = 25;
 pub struct ReviewOptions {
     pub max_findings: u8,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub include_dimensions: Option<Vec<Dimension>>,
+    pub include_dimensions: Option<Vec<String>>,
 }
 
 impl Default for ReviewOptions {
@@ -119,62 +83,8 @@ impl Default for ReviewOptions {
 }
 
 // ---------------------------------------------------------------------------
-// Shared enums
+// Shared enum — core contract only
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-#[serde(rename_all = "snake_case")]
-pub enum Dimension {
-    OverallCodeHealth,
-    ClDescription,
-    ChangeScope,
-    Design,
-    Functionality,
-    Complexity,
-    Tests,
-    Naming,
-    Comments,
-    Style,
-    Consistency,
-    Documentation,
-    ContextAndReviewDepth,
-}
-
-impl Dimension {
-    pub fn as_key(&self) -> String {
-        serde_key(self)
-    }
-
-    pub fn parse(s: &str) -> Option<Self> {
-        parse_enum_from_str(s)
-    }
-}
-
-/// Declaration order is significant: it defines severity ranking (blockers
-/// first) used when grouping findings.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-#[serde(rename_all = "snake_case")]
-pub enum Severity {
-    Blocker,
-    Major,
-    Minor,
-    Nit,
-}
-
-impl Severity {
-    pub fn as_key(&self) -> String {
-        serde_key(self)
-    }
-
-    pub fn all() -> &'static [Severity] {
-        &[
-            Severity::Blocker,
-            Severity::Major,
-            Severity::Minor,
-            Severity::Nit,
-        ]
-    }
-}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -186,8 +96,13 @@ pub enum Verdict {
 }
 
 impl Verdict {
-    pub fn as_key(&self) -> String {
-        serde_key(self)
+    pub fn as_key(&self) -> &'static str {
+        match self {
+            Verdict::Approve => "approve",
+            Verdict::ApproveWithComments => "approve_with_comments",
+            Verdict::RequestChanges => "request_changes",
+            Verdict::Reject => "reject",
+        }
     }
 
     pub fn is_pass(&self) -> bool {
@@ -196,41 +111,71 @@ impl Verdict {
 }
 
 // ---------------------------------------------------------------------------
-// Output types (mirror schemas/output.schema.json)
+// Output types — Pack-agnostic wrappers
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct ReviewOutput {
-    pub summary: Summary,
-    pub grades: BTreeMap<Dimension, GradeEntry>,
-    pub overall_score: f64,
-    pub good_things: Vec<String>,
-    pub findings: Vec<Finding>,
-    pub limitations: Vec<String>,
-    pub suggested_next_steps: Vec<String>,
+/// Lossless wrapper around validated agent output.
+/// Contract fields are accessible via typed helpers; all Pack-specific fields
+/// remain in the raw JSON value.
+#[derive(Debug, Clone)]
+pub struct ReviewDocument {
+    value: serde_json::Value,
 }
 
-impl ReviewOutput {
-    /// Returns the unrounded mean of all scored grade entries, or `None` if no grades are scored.
-    pub fn mean_grade_score(&self) -> Option<f64> {
-        let scores: Vec<f64> = self.grades.values().filter_map(|g| g.score()).collect();
-        if scores.is_empty() {
-            None
-        } else {
-            Some(scores.iter().sum::<f64>() / scores.len() as f64)
-        }
+impl ReviewDocument {
+    pub fn from_value(value: serde_json::Value) -> Self {
+        Self { value }
+    }
+
+    /// Parse the contract `verdict` field from `summary.verdict`.
+    pub fn verdict(&self) -> Option<Verdict> {
+        let s = self.value["summary"]["verdict"].as_str()?;
+        serde_json::from_value(serde_json::Value::String(s.to_string())).ok()
+    }
+
+    /// Read `summary.overall_score`, falling back to top-level `overall_score`.
+    pub fn overall_score(&self) -> Option<f64> {
+        self.value["summary"]["overall_score"]
+            .as_f64()
+            .or_else(|| self.value["overall_score"].as_f64())
+    }
+
+    /// Deserialize `findings` array into `Vec<Finding>`.
+    pub fn findings(&self) -> Vec<Finding> {
+        self.value["findings"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| serde_json::from_value(v.clone()).ok())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Access the full raw JSON value.
+    pub fn raw(&self) -> &serde_json::Value {
+        &self.value
     }
 }
 
+/// A finding with Pack-defined dimension and severity strings.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct Summary {
-    pub verdict: Verdict,
-    pub overall_score: f64,
-    pub one_paragraph: String,
+pub struct Finding {
+    pub id: String,
+    pub dimension: String,
+    pub severity: String,
+    pub location: String,
+    pub observation: String,
+    pub why_it_matters: String,
+    pub recommended_action: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub evidence: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub suggested_patch: Option<String>,
 }
 
+/// Grade entry for a single dimension — shape is Pack-agnostic.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ScoredGrade {
@@ -268,22 +213,6 @@ impl GradeEntry {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct Finding {
-    pub id: String,
-    pub dimension: Dimension,
-    pub severity: Severity,
-    pub location: String,
-    pub observation: String,
-    pub why_it_matters: String,
-    pub recommended_action: String,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub evidence: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub suggested_patch: Option<String>,
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -291,7 +220,6 @@ pub struct Finding {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::Value;
 
     #[test]
     fn input_round_trips_minimal() {
@@ -306,9 +234,18 @@ mod tests {
     }
 
     #[test]
-    fn dimension_serializes_snake_case() {
-        let v = serde_json::to_value(Dimension::OverallCodeHealth).unwrap();
-        assert_eq!(v, Value::String("overall_code_health".into()));
+    fn input_focus_serializes_as_strings() {
+        let input = ReviewInput {
+            working_dir: ".".to_string(),
+            target: None,
+            change_context: None,
+            focus: vec!["security".to_string(), "concurrency".to_string()],
+            project_hints: None,
+            options: ReviewOptions::default(),
+        };
+        let v = serde_json::to_value(&input).unwrap();
+        assert_eq!(v["focus"][0], "security");
+        assert_eq!(v["focus"][1], "concurrency");
     }
 
     #[test]
@@ -317,6 +254,24 @@ mod tests {
         assert!(Verdict::ApproveWithComments.is_pass());
         assert!(!Verdict::RequestChanges.is_pass());
         assert!(!Verdict::Reject.is_pass());
+    }
+
+    #[test]
+    fn verdict_as_key_matches_serde() {
+        let cases = [
+            (Verdict::Approve, "approve"),
+            (Verdict::ApproveWithComments, "approve_with_comments"),
+            (Verdict::RequestChanges, "request_changes"),
+            (Verdict::Reject, "reject"),
+        ];
+        for (variant, expected) in cases {
+            assert_eq!(variant.as_key(), expected);
+            assert_eq!(
+                serde_json::to_value(variant).unwrap(),
+                serde_json::Value::String(expected.into()),
+                "serde/as_key mismatch for {expected}"
+            );
+        }
     }
 
     #[test]
@@ -339,87 +294,47 @@ mod tests {
     }
 
     #[test]
-    fn focus_area_parse_round_trips_all_variants() {
-        let variants = [
-            FocusArea::Security,
-            FocusArea::Concurrency,
-            FocusArea::Accessibility,
-            FocusArea::Internationalization,
-            FocusArea::Privacy,
-            FocusArea::Performance,
-            FocusArea::ApiDesign,
-            FocusArea::Ui,
-        ];
-        for v in variants {
-            assert_eq!(
-                FocusArea::parse(&v.as_key()),
-                Some(v),
-                "round-trip failed for {:?}",
-                v
-            );
-        }
+    fn review_document_verdict_accessor() {
+        let value = serde_json::json!({
+            "summary": { "verdict": "approve", "overall_score": 8, "one_paragraph": "Good." },
+            "grades": { "alpha": { "score": 8, "rationale": "ok" } },
+            "overall_score": 8,
+            "good_things": [],
+            "findings": [],
+            "limitations": [],
+            "suggested_next_steps": ["step"]
+        });
+        let doc = ReviewDocument::from_value(value);
+        assert_eq!(doc.verdict(), Some(Verdict::Approve));
+        assert!((doc.overall_score().unwrap() - 8.0).abs() < f64::EPSILON);
+        assert_eq!(doc.findings().len(), 0);
     }
 
     #[test]
-    fn dimension_parse_round_trips_all_variants() {
-        let variants = [
-            Dimension::OverallCodeHealth,
-            Dimension::ClDescription,
-            Dimension::ChangeScope,
-            Dimension::Design,
-            Dimension::Functionality,
-            Dimension::Complexity,
-            Dimension::Tests,
-            Dimension::Naming,
-            Dimension::Comments,
-            Dimension::Style,
-            Dimension::Consistency,
-            Dimension::Documentation,
-            Dimension::ContextAndReviewDepth,
-        ];
-        for v in variants {
-            assert_eq!(
-                Dimension::parse(&v.as_key()),
-                Some(v),
-                "round-trip failed for {:?}",
-                v
-            );
-        }
-    }
-
-    #[test]
-    fn severity_as_key_matches_serde() {
-        let cases = [
-            (Severity::Blocker, "blocker"),
-            (Severity::Major, "major"),
-            (Severity::Minor, "minor"),
-            (Severity::Nit, "nit"),
-        ];
-        for (variant, expected) in cases {
-            assert_eq!(variant.as_key(), expected);
-            assert_eq!(
-                serde_json::to_value(variant).unwrap(),
-                Value::String(expected.into()),
-                "serde/as_key mismatch for {expected}"
-            );
-        }
-    }
-
-    #[test]
-    fn verdict_as_key_matches_serde() {
-        let cases = [
-            (Verdict::Approve, "approve"),
-            (Verdict::ApproveWithComments, "approve_with_comments"),
-            (Verdict::RequestChanges, "request_changes"),
-            (Verdict::Reject, "reject"),
-        ];
-        for (variant, expected) in cases {
-            assert_eq!(variant.as_key(), expected);
-            assert_eq!(
-                serde_json::to_value(variant).unwrap(),
-                Value::String(expected.into()),
-                "serde/as_key mismatch for {expected}"
-            );
-        }
+    fn review_document_findings_accessor() {
+        let value = serde_json::json!({
+            "summary": { "verdict": "request_changes", "overall_score": 5, "one_paragraph": "Issues." },
+            "grades": { "beta": { "score": 5, "rationale": "needs work" } },
+            "overall_score": 5,
+            "good_things": [],
+            "findings": [
+                {
+                    "id": "alpha-001",
+                    "dimension": "alpha",
+                    "severity": "high",
+                    "location": "src/main.rs:1",
+                    "observation": "obs",
+                    "why_it_matters": "matters",
+                    "recommended_action": "fix"
+                }
+            ],
+            "limitations": [],
+            "suggested_next_steps": ["step"]
+        });
+        let doc = ReviewDocument::from_value(value);
+        let findings = doc.findings();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].dimension, "alpha");
+        assert_eq!(findings[0].severity, "high");
     }
 }

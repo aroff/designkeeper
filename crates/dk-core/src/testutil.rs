@@ -1,11 +1,12 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Copy the default template pack from the repo's `templates/default/` into `dest`.
-/// Use in tests that need a real pack on disk.
-pub fn copy_default_pack(dest: &Path) {
-    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../templates/default");
-    copy_dir_all(&src, dest).expect("copy_default_pack failed");
+/// Copy a named fixture pack from `tests/fixtures/packs/<name>/` into `dest`.
+pub fn copy_fixture_pack(name: &str, dest: &Path) {
+    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/packs")
+        .join(name);
+    copy_dir_all(&src, dest).unwrap_or_else(|e| panic!("copy_fixture_pack({name}) failed: {e}"));
 }
 
 fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {

@@ -7,32 +7,21 @@ Here is the analysis result:
   "summary": {
     "verdict": "approve_with_comments",
     "overall_score": 7,
-    "one_paragraph": "Focused utility extraction with adequate tests. Documentation gap on public API is the main follow-up."
+    "one_paragraph": "Focused utility extraction with adequate tests. Minor documentation gap on public API is the main follow-up."
   },
   "grades": {
-    "overall_code_health": { "score": 7, "rationale": "Slight improvement; doc gap prevents higher score." },
-    "cl_description": { "score": 8, "rationale": "States migration of helper from handler." },
-    "change_scope": { "score": 8, "rationale": "Two files, one concern." },
-    "design": { "score": 7, "rationale": "Helper placement in util is appropriate." },
-    "functionality": { "score": 7, "rationale": "Behavior preserved per tests." },
-    "complexity": { "score": 8, "rationale": "Shorter handler method." },
-    "tests": { "score": 7, "rationale": "Unit test moved with function." },
-    "naming": { "score": 8, "rationale": "parse_order_id is explicit." },
-    "comments": { "score": 7, "rationale": "Adequate." },
-    "style": { "score": 8, "rationale": "Consistent." },
-    "consistency": { "score": 8, "rationale": "Matches util module patterns." },
-    "documentation": { "score": 5, "rationale": "Public util function lacks crate-level doc." },
-    "context_and_review_depth": { "score": 7, "rationale": "Call sites updated." }
+    "alpha": { "score": 7, "rationale": "Clean structure; doc gap prevents higher score." },
+    "beta": { "score": 7, "rationale": "Behavior preserved per tests; minor coverage gap." }
   },
   "overall_score": 7,
   "good_things": ["Handler no longer parses IDs inline."],
   "findings": [
     {
-      "id": "documentation-001",
-      "dimension": "documentation",
-      "severity": "minor",
+      "id": "beta-001",
+      "dimension": "beta",
+      "severity": "low",
       "location": "src/util/order.rs:1",
-      "observation": "pub fn parse_order_id has no /// doc comment.",
+      "observation": "pub fn parse_order_id has no doc comment.",
       "why_it_matters": "Public API surface should document errors and format.",
       "recommended_action": "Add rustdoc with examples and error conditions."
     }

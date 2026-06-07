@@ -138,7 +138,8 @@ impl DoctorCheck for InstalledPacksCheck {
                     id,
                     title,
                     CheckSeverity::Warning,
-                    "No template packs installed. Built-in fallbacks (default, structural) are available.".to_string(),
+                    "No template packs installed. Run `dk install` to fetch and install packs."
+                        .to_string(),
                     None,
                     Some("Run `dk install` to fetch and install packs.".to_string()),
                 )
