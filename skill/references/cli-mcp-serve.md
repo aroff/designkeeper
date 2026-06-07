@@ -44,9 +44,43 @@ dk mcp serve --transport http --host 127.0.0.1 --port 8080 --path /mcp
 
 ## Registering with an agent
 
-`dk` doesn't include an `mcp install` command. Register it manually in your
-agent's MCP config — e.g. an `http` server at `http://127.0.0.1:8080/mcp`, or a
-`stdio` server whose command is `dk mcp serve --transport stdio`.
+Use `dk mcp install` to register `dk` in your agent's MCP config automatically:
+
+```sh
+# Cursor — project scope (writes .cursor/mcp.json in CWD)
+dk mcp install --agent cursor --stdio
+
+# Cursor — global scope (writes ~/.cursor/mcp.json)
+dk mcp install --agent cursor --stdio --scope global
+
+# Claude Code — project scope (writes .mcp.json in CWD)
+dk mcp install --agent claude --stdio
+
+# Preview what would be written without touching disk
+dk mcp install --agent cursor --stdio --dry-run
+
+# List all supported agents and their config file paths
+dk mcp list
+```
+
+See `skill/references/cli-builtins.md` for the full flag reference and all
+supported agents (`claude`, `cursor`, `gemini`, `copilot`, `opencode`, `codex`).
+
+### Manual registration (deprecated)
+
+If you cannot use `dk mcp install`, register manually in your agent's MCP config
+— e.g. an `http` server at `http://127.0.0.1:8080/mcp`, or a `stdio` server:
+
+```json
+{
+  "mcpServers": {
+    "dk": {
+      "command": "/path/to/dk",
+      "args": ["mcp", "serve", "--transport", "stdio"]
+    }
+  }
+}
+```
 
 ## Gotchas
 
