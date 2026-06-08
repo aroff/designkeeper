@@ -1,5 +1,13 @@
 # Review — implementation spec
 
+> **Note (ADR-0004):** `dk-core` is now **template-agnostic**. The rubric
+> enums (`Dimension`, `Severity`, `FocusArea`) and the post-validation rules
+> below have been removed; dimensions/severities are arbitrary Pack-defined
+> strings, validated by each Pack's `schemas/review.json` plus the embedded
+> `dk-core-contract-v1.json`. The "Output extraction" / "Validation rules"
+> sections are retained for historical context — see
+> [ADR-0004](adr/0004-template-agnostic-core.md) for the current model.
+
 Structured pipeline artifact for **`dk review`**: structured review rubric (default: Google eng-practices), 0–10 dimension scores, actionable findings. Consumed by `dk-core` and the aikit-sdk structured pipeline (template → agent → schema validation → report).
 
 ## Implementation reliance

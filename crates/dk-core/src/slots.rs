@@ -1,4 +1,4 @@
-//! Slot-value construction for the prompt (9 slots) and report (9 slots).
+//! Slot-value construction for the prompt (9 slots) and report (generic).
 
 pub use prompt::{build_prompt_slots, slots_as_pairs};
 pub use report::build_report_slots;
@@ -16,11 +16,11 @@ mod prompt {
     use crate::pack;
     use crate::types::ReviewInput;
 
-    /// Build the 9 required prompt-template slots (spec §4.4).
+    /// Build the 9 required prompt-template slots.
     pub fn build_prompt_slots(
         input: &ReviewInput,
         config: &DkConfig,
-        template_dir: &Path,
+        pack_dir: &Path,
     ) -> Result<HashMap<String, String>, std::io::Error> {
         let working_dir = Path::new(&input.working_dir);
         let working_dir_abs = std::fs::canonicalize(working_dir)
@@ -39,8 +39,8 @@ mod prompt {
             }
         };
 
-        let methodology = read_or_default(&pack::methodology_path(template_dir), "")?;
-        let output_schema = minify_schema(&pack::output_schema_path(template_dir))?;
+        let methodology = read_or_default(&pack::methodology_path(pack_dir), "")?;
+        let output_schema = minify_schema(&pack::output_schema_path(pack_dir))?;
 
         let mut slots = HashMap::new();
         slots.insert("working_dir".to_string(), working_dir_abs);
@@ -93,15 +93,11 @@ mod prompt {
         lines.join("\n")
     }
 
-    fn join_keys<T, F: Fn(&T) -> String>(items: &[T], key_fn: F) -> String {
-        items.iter().map(key_fn).collect::<Vec<_>>().join(", ")
-    }
-
     fn format_focus(input: &ReviewInput) -> String {
         if input.focus.is_empty() {
             "none".to_string()
         } else {
-            join_keys(&input.focus, |f| f.as_key())
+            input.focus.join(", ")
         }
     }
 
@@ -127,7 +123,7 @@ mod prompt {
     fn format_dimensions_filter(input: &ReviewInput) -> String {
         match &input.options.include_dimensions {
             Some(dims) if !dims.is_empty() => {
-                let list = join_keys(dims, |d| d.as_key());
+                let list = dims.join(", ");
                 format!("Grade ONLY these dimensions: {list}; mark all others not_evaluated.")
             }
             _ => "Grade every in-scope dimension.".to_string(),
@@ -157,7 +153,7 @@ mod prompt {
     mod tests {
         use super::*;
         use crate::config::default_config;
-        use crate::types::{ChangeContext, Dimension, FocusArea, ReviewOptions};
+        use crate::types::{ChangeContext, ReviewOptions};
         use tempfile::tempdir;
 
         fn input_with(working_dir: &str) -> ReviewInput {
@@ -174,7 +170,7 @@ mod prompt {
         #[test]
         fn builds_all_nine_prompt_slots() {
             let dir = tempdir().unwrap();
-            crate::testutil::copy_default_pack(dir.path());
+            crate::testutil::copy_fixture_pack("minimal", dir.path());
             let wd = tempdir().unwrap();
             let slots = build_prompt_slots(
                 &input_with(wd.path().to_str().unwrap()),
@@ -211,7 +207,7 @@ mod prompt {
         #[test]
         fn change_context_formats_bullets() {
             let dir = tempdir().unwrap();
-            crate::testutil::copy_default_pack(dir.path());
+            crate::testutil::copy_fixture_pack("minimal", dir.path());
             let wd = tempdir().unwrap();
             let mut input = input_with(wd.path().to_str().unwrap());
             input.change_context = Some(ChangeContext {
@@ -221,7 +217,7 @@ mod prompt {
                 head_ref: Some("feature/x".to_string()),
                 diff_stat: Some("4 files".to_string()),
             });
-            input.focus = vec![FocusArea::Concurrency, FocusArea::Security];
+            input.focus = vec!["concurrency".to_string(), "security".to_string()];
             let slots = build_prompt_slots(&input, &default_config(), dir.path()).unwrap();
             assert!(slots["change_context"].contains("Title: Add retry policy"));
             assert!(slots["change_context"].contains("Base: main → Head: feature/x"));
@@ -231,7 +227,7 @@ mod prompt {
         #[test]
         fn discovery_used_when_target_absent() {
             let pack_dir = tempdir().unwrap();
-            crate::testutil::copy_default_pack(pack_dir.path());
+            crate::testutil::copy_fixture_pack("minimal", pack_dir.path());
             let wd = tempdir().unwrap();
             std::fs::write(wd.path().join("a.rs"), "fn a() {}").unwrap();
             let mut input = input_with(wd.path().to_str().unwrap());
@@ -243,15 +239,15 @@ mod prompt {
         #[test]
         fn dimensions_filter_with_some_emits_only_clause() {
             let pack_dir = tempdir().unwrap();
-            crate::testutil::copy_default_pack(pack_dir.path());
+            crate::testutil::copy_fixture_pack("minimal", pack_dir.path());
             let wd = tempdir().unwrap();
             let mut input = input_with(wd.path().to_str().unwrap());
-            input.options.include_dimensions = Some(vec![Dimension::Design, Dimension::Tests]);
+            input.options.include_dimensions = Some(vec!["alpha".to_string(), "beta".to_string()]);
             let slots = build_prompt_slots(&input, &default_config(), pack_dir.path()).unwrap();
             let filter = &slots["dimensions_filter"];
             assert!(filter.contains("ONLY"), "expected ONLY in: {filter}");
-            assert!(filter.contains("design"), "expected 'design' in: {filter}");
-            assert!(filter.contains("tests"), "expected 'tests' in: {filter}");
+            assert!(filter.contains("alpha"), "expected 'alpha' in: {filter}");
+            assert!(filter.contains("beta"), "expected 'beta' in: {filter}");
         }
     }
 }
@@ -262,168 +258,315 @@ mod prompt {
 
 mod report {
     use std::collections::HashMap;
+    use std::path::Path;
 
-    use crate::types::{Finding, ReviewOutput};
+    use crate::contract::ContractValidator;
+    use crate::pack;
+    use crate::types::ReviewDocument;
 
-    /// Build the 9 report-template slots from validated output (spec §4.4).
-    pub fn build_report_slots(output: &ReviewOutput) -> HashMap<String, String> {
+    /// Build report-template slots from a validated `ReviewDocument`.
+    ///
+    /// All scalar keys in `summary` are automatically exposed as slots.
+    /// Computed slots (`grades_table`, `findings_section`, etc.) are always present.
+    pub fn build_report_slots(doc: &ReviewDocument, pack_dir: &Path) -> HashMap<String, String> {
         let mut slots = HashMap::new();
+
+        // Flatten all summary scalar fields into slots.
+        if let Some(summary) = doc.raw()["summary"].as_object() {
+            for (key, val) in summary {
+                match val {
+                    serde_json::Value::String(s) => {
+                        slots.insert(key.clone(), s.clone());
+                    }
+                    serde_json::Value::Number(n) => {
+                        if let Some(f) = n.as_f64() {
+                            slots.insert(key.clone(), format!("{f:.1}"));
+                        }
+                    }
+                    other => {
+                        let kind = if other.is_null() {
+                            "null"
+                        } else {
+                            "complex type"
+                        };
+                        tracing::warn!(
+                            "summary.{key} is not a string or number ({kind}); skipping slot"
+                        );
+                    }
+                }
+            }
+        }
+
+        // Severity order from Pack output schema for ordering findings.
+        let severity_order = read_severity_order(pack_dir);
+
+        // Computed slots.
+        slots.insert("grades_table".to_string(), format_grades_table(doc));
         slots.insert(
-            "verdict".to_string(),
-            output.summary.verdict.as_key().to_string(),
+            "findings_section".to_string(),
+            format_findings(doc, &severity_order),
         );
-        slots.insert(
-            "overall_score".to_string(),
-            format!("{:.1}", output.summary.overall_score),
-        );
-        slots.insert(
-            "one_paragraph".to_string(),
-            output.summary.one_paragraph.clone(),
-        );
-        slots.insert("grades_table".to_string(), format_grades_table(output));
-        slots.insert("findings_section".to_string(), format_findings(output));
         slots.insert(
             "good_things_section".to_string(),
-            bullet_list(&output.good_things),
+            bullet_list_from_value(&doc.raw()["good_things"]),
         );
         slots.insert(
             "limitations_section".to_string(),
-            bullet_list(&output.limitations),
+            bullet_list_from_value(&doc.raw()["limitations"]),
         );
         slots.insert(
             "suggested_next_steps_section".to_string(),
-            numbered_list(&output.suggested_next_steps),
+            numbered_list_from_value(&doc.raw()["suggested_next_steps"]),
         );
         slots.insert(
             "report_body".to_string(),
-            serde_json::to_string_pretty(output).unwrap_or_default(),
+            serde_json::to_string_pretty(doc.raw()).unwrap_or_default(),
         );
+
         slots
     }
 
-    fn format_grades_table(output: &ReviewOutput) -> String {
-        if output.grades.is_empty() {
-            return "| _none_ | | |".to_string();
-        }
-        output
-            .grades
-            .iter()
-            .map(|(dim, entry)| {
-                let score = match entry.score() {
-                    Some(s) => format!("{s:.1}"),
-                    None => "N/A".to_string(),
-                };
-                format!("| {} | {} | {} |", dim.as_key(), score, entry.rationale())
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+    fn read_severity_order(pack_dir: &Path) -> Option<Vec<String>> {
+        let text = std::fs::read_to_string(pack::output_schema_path(pack_dir)).ok()?;
+        let schema: serde_json::Value = serde_json::from_str(&text).ok()?;
+        ContractValidator::severity_order(&schema)
     }
 
-    fn format_findings(output: &ReviewOutput) -> String {
-        if output.findings.is_empty() {
+    fn format_grades_table(doc: &ReviewDocument) -> String {
+        let Some(grades) = doc.raw()["grades"].as_object() else {
+            return "| _none_ | | |".to_string();
+        };
+        if grades.is_empty() {
+            return "| _none_ | | |".to_string();
+        }
+        let mut rows: Vec<String> = grades
+            .iter()
+            .map(|(key, entry)| {
+                let score = if let Some(s) = entry["score"].as_f64() {
+                    format!("{s:.1}")
+                } else {
+                    "N/A".to_string()
+                };
+                let rationale = entry["rationale"].as_str().unwrap_or("");
+                format!("| {key} | {score} | {rationale} |")
+            })
+            .collect();
+        rows.sort(); // stable, deterministic output
+        rows.join("\n")
+    }
+
+    fn format_findings(doc: &ReviewDocument, severity_order: &Option<Vec<String>>) -> String {
+        let findings = doc.findings();
+        if findings.is_empty() {
             return "None.".to_string();
         }
-        let mut findings: Vec<&Finding> = output.findings.iter().collect();
-        findings.sort_by_key(|f| f.severity);
-        findings
-            .iter()
-            .map(|f| {
+
+        // Determine severity ordering.
+        let order: Vec<String> = if let Some(ord) = severity_order {
+            ord.clone()
+        } else {
+            // Fallback: collect unique severities, sort lexicographically descending.
+            let mut sevs: Vec<String> = findings
+                .iter()
+                .map(|f| f.severity.clone())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            sevs.sort();
+            sevs.reverse();
+            sevs
+        };
+
+        // Group findings by severity in schema order, within group sort by id.
+        let mut lines: Vec<String> = Vec::new();
+        for sev in &order {
+            let mut group: Vec<&crate::types::Finding> =
+                findings.iter().filter(|f| &f.severity == sev).collect();
+            if group.is_empty() {
+                continue;
+            }
+            group.sort_by_key(|f| f.id.as_str());
+            for f in group {
                 let mut s = format!(
                     "- [{}] {}: {} ({})",
-                    f.severity.as_key(),
-                    f.id,
-                    f.observation,
-                    f.location
+                    f.severity, f.id, f.observation, f.location
                 );
                 if let Some(patch) = &f.suggested_patch {
                     s.push_str(&format!("\n  ```suggestion\n  {patch}\n  ```"));
                 }
-                s
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    fn format_list<F: Fn(usize, &str) -> String>(items: &[String], fmt: F) -> String {
-        if items.is_empty() {
-            return "None.".to_string();
+                lines.push(s);
+            }
         }
-        items
+
+        // Append any findings whose severity wasn't in the order list.
+        let ordered_sevs: std::collections::HashSet<_> = order.iter().collect();
+        let mut remainder: Vec<&crate::types::Finding> = findings
             .iter()
-            .enumerate()
-            .map(|(i, s)| fmt(i, s))
-            .collect::<Vec<_>>()
-            .join("\n")
+            .filter(|f| !ordered_sevs.contains(&f.severity))
+            .collect();
+        remainder.sort_by_key(|f| f.id.as_str());
+        for f in remainder {
+            let s = format!(
+                "- [{}] {}: {} ({})",
+                f.severity, f.id, f.observation, f.location
+            );
+            lines.push(s);
+        }
+
+        if lines.is_empty() {
+            "None.".to_string()
+        } else {
+            lines.join("\n")
+        }
     }
 
-    fn bullet_list(items: &[String]) -> String {
-        format_list(items, |_, s| format!("- {s}"))
+    fn bullet_list_from_value(val: &serde_json::Value) -> String {
+        match val.as_array() {
+            Some(arr) if !arr.is_empty() => arr
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(|s| format!("- {s}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => "None.".to_string(),
+        }
     }
 
-    fn numbered_list(items: &[String]) -> String {
-        format_list(items, |i, s| format!("{}. {s}", i + 1))
+    fn numbered_list_from_value(val: &serde_json::Value) -> String {
+        match val.as_array() {
+            Some(arr) if !arr.is_empty() => arr
+                .iter()
+                .filter_map(|v| v.as_str())
+                .enumerate()
+                .map(|(i, s)| format!("{}. {s}", i + 1))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => "None.".to_string(),
+        }
     }
 
     #[cfg(test)]
     mod tests {
         use super::*;
-        use crate::types::{Dimension, Finding, ReviewOutput, Severity, Summary, Verdict};
-        use std::collections::BTreeMap;
+        use tempfile::tempdir;
 
-        fn minimal_output_with_finding(finding: Finding) -> ReviewOutput {
-            ReviewOutput {
-                summary: Summary {
-                    verdict: Verdict::Approve,
-                    overall_score: 7.0,
-                    one_paragraph: "ok".to_string(),
+        fn minimal_doc() -> ReviewDocument {
+            ReviewDocument::from_value(serde_json::json!({
+                "summary": {
+                    "verdict": "approve",
+                    "overall_score": 8,
+                    "one_paragraph": "Looks good."
                 },
-                grades: BTreeMap::new(),
-                overall_score: 7.0,
-                good_things: vec![],
-                findings: vec![finding],
-                limitations: vec![],
-                suggested_next_steps: vec![],
-            }
-        }
-
-        fn base_finding() -> Finding {
-            Finding {
-                id: "design-001".to_string(),
-                dimension: Dimension::Design,
-                severity: Severity::Minor,
-                location: "src/main.rs:1".to_string(),
-                observation: "obs".to_string(),
-                why_it_matters: "why".to_string(),
-                recommended_action: "action".to_string(),
-                evidence: None,
-                suggested_patch: None,
-            }
-        }
-
-        #[test]
-        fn format_findings_with_suggested_patch_includes_fenced_block() {
-            let mut f = base_finding();
-            f.suggested_patch = Some("patch text".to_string());
-            let output = minimal_output_with_finding(f);
-            let rendered = format_findings(&output);
-            assert!(
-                rendered.contains("patch text"),
-                "expected 'patch text' in: {rendered}"
-            );
-            assert!(
-                rendered.contains("```suggestion"),
-                "expected fenced block in: {rendered}"
-            );
+                "grades": {
+                    "alpha": { "score": 8, "rationale": "solid" },
+                    "beta": { "score": 7, "rationale": "ok" }
+                },
+                "overall_score": 8,
+                "good_things": ["clean code"],
+                "findings": [
+                    {
+                        "id": "alpha-001",
+                        "dimension": "alpha",
+                        "severity": "low",
+                        "location": "src/main.rs:1",
+                        "observation": "minor nit",
+                        "why_it_matters": "style",
+                        "recommended_action": "fix it"
+                    }
+                ],
+                "limitations": ["could not run tests"],
+                "suggested_next_steps": ["address nit"]
+            }))
         }
 
         #[test]
-        fn format_findings_without_suggested_patch_has_no_fenced_block() {
-            let output = minimal_output_with_finding(base_finding());
-            let rendered = format_findings(&output);
-            assert!(
-                !rendered.contains("```suggestion"),
-                "unexpected fenced block in: {rendered}"
+        fn summary_scalars_become_slots() {
+            let dir = tempdir().unwrap();
+            crate::testutil::copy_fixture_pack("minimal", dir.path());
+            let slots = build_report_slots(&minimal_doc(), dir.path());
+            assert_eq!(slots.get("verdict").map(|s| s.as_str()), Some("approve"));
+            assert_eq!(slots.get("overall_score").map(|s| s.as_str()), Some("8.0"));
+            assert!(slots.contains_key("one_paragraph"));
+        }
+
+        #[test]
+        fn extra_summary_field_auto_exposed() {
+            let dir = tempdir().unwrap();
+            crate::testutil::copy_fixture_pack("minimal", dir.path());
+            let doc = ReviewDocument::from_value(serde_json::json!({
+                "summary": {
+                    "verdict": "approve",
+                    "overall_score": 8,
+                    "one_paragraph": "ok",
+                    "structure_score": 8.5
+                },
+                "grades": { "alpha": { "score": 8, "rationale": "ok" } },
+                "overall_score": 8,
+                "good_things": [],
+                "findings": [],
+                "limitations": [],
+                "suggested_next_steps": ["step"]
+            }));
+            let slots = build_report_slots(&doc, dir.path());
+            assert_eq!(
+                slots.get("structure_score").map(|s| s.as_str()),
+                Some("8.5")
             );
+        }
+
+        #[test]
+        fn grades_table_contains_dimension_key() {
+            let dir = tempdir().unwrap();
+            crate::testutil::copy_fixture_pack("minimal", dir.path());
+            let slots = build_report_slots(&minimal_doc(), dir.path());
+            let table = slots.get("grades_table").unwrap();
+            assert!(table.contains("alpha"), "table: {table}");
+            assert!(table.contains("beta"), "table: {table}");
+        }
+
+        #[test]
+        fn findings_with_patch_includes_fenced_block() {
+            let dir = tempdir().unwrap();
+            crate::testutil::copy_fixture_pack("minimal", dir.path());
+            let doc = ReviewDocument::from_value(serde_json::json!({
+                "summary": { "verdict": "approve", "overall_score": 8, "one_paragraph": "ok" },
+                "grades": { "alpha": { "score": 8, "rationale": "ok" } },
+                "overall_score": 8,
+                "good_things": [],
+                "findings": [{
+                    "id": "f1",
+                    "dimension": "alpha",
+                    "severity": "low",
+                    "location": "src/x.rs:1",
+                    "observation": "obs",
+                    "why_it_matters": "why",
+                    "recommended_action": "fix",
+                    "suggested_patch": "patch text"
+                }],
+                "limitations": [],
+                "suggested_next_steps": ["step"]
+            }));
+            let slots = build_report_slots(&doc, dir.path());
+            let findings = slots.get("findings_section").unwrap();
+            assert!(findings.contains("patch text"), "findings: {findings}");
+            assert!(findings.contains("```suggestion"), "findings: {findings}");
+        }
+
+        #[test]
+        fn all_computed_slots_present() {
+            let dir = tempdir().unwrap();
+            crate::testutil::copy_fixture_pack("minimal", dir.path());
+            let slots = build_report_slots(&minimal_doc(), dir.path());
+            for key in [
+                "grades_table",
+                "findings_section",
+                "good_things_section",
+                "limitations_section",
+                "suggested_next_steps_section",
+                "report_body",
+            ] {
+                assert!(slots.contains_key(key), "missing computed slot: {key}");
+            }
         }
     }
 }

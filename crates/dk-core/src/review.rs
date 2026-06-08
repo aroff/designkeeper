@@ -1,4 +1,4 @@
-//! Review orchestration: `run_review`, score reconciliation, and report rendering.
+//! Review orchestration: `run_review`, input/contract validation, and report rendering.
 
 use std::path::{Path, PathBuf};
 
@@ -8,12 +8,10 @@ use aikit_sdk::runner::RunError;
 use aikit_sdk::{AgentRunner, Pipeline, PipelineError, TemplateRenderer};
 
 use crate::config::DkConfig;
+use crate::contract::ContractValidator;
 use crate::pack;
-use crate::types::{ReviewInput, ReviewOutput};
-use crate::{slots, validation};
-
-/// Tolerance for the mean-of-grades drift check (V2).
-pub const MEAN_DRIFT_TOLERANCE: f64 = 0.5;
+use crate::slots;
+use crate::types::{ReviewDocument, ReviewInput};
 
 // ---------------------------------------------------------------------------
 // Progress events
@@ -51,6 +49,10 @@ pub enum ReviewError {
     PipelineFailure { message: String },
     #[error("template slot missing: {slot}")]
     TemplateSlotsError { slot: String },
+    #[error("input validation failed: {}", errors.join("; "))]
+    InputValidationFailed { errors: Vec<String> },
+    #[error("contract violation: {}", errors.join("; "))]
+    ContractViolation { errors: Vec<String> },
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -66,6 +68,8 @@ impl ReviewError {
             ReviewError::TemplateMissing { .. } => "DK_TEMPLATE_NOT_FOUND",
             ReviewError::PipelineFailure { .. } => "DK_PIPELINE_ERROR",
             ReviewError::TemplateSlotsError { .. } => "DK_TEMPLATE_SLOT",
+            ReviewError::InputValidationFailed { .. } => "DK_INPUT_VALIDATION",
+            ReviewError::ContractViolation { .. } => "DK_CONTRACT_VIOLATION",
             ReviewError::Io(_) => "DK_IO_ERROR",
         }
     }
@@ -79,10 +83,10 @@ impl ReviewError {
 pub fn run_review(
     input: ReviewInput,
     config: &DkConfig,
-    template_dir: &Path,
+    pack_dir: &Path,
     runner: AgentRunner,
     progress: &ProgressFn,
-) -> Result<ReviewOutput, ReviewError> {
+) -> Result<ReviewDocument, ReviewError> {
     let working_dir = Path::new(&input.working_dir);
     if !working_dir.is_dir() {
         return Err(ReviewError::WorkingDirInvalid {
@@ -90,10 +94,13 @@ pub fn run_review(
         });
     }
 
-    let prompt_slots = slots::build_prompt_slots(&input, config, template_dir)?;
+    // Validate input against Pack's review-input.json (if present).
+    validate_input(&input, pack_dir)?;
 
-    let prompt_template = read_template(&pack::prompt_path(template_dir))?;
-    let schema_str = read_template(&pack::output_schema_path(template_dir))?;
+    let prompt_slots = slots::build_prompt_slots(&input, config, pack_dir)?;
+
+    let prompt_template = read_template(&pack::prompt_path(pack_dir))?;
+    let schema_str = read_template(&pack::output_schema_path(pack_dir))?;
 
     let slots_vec = slots::slots_as_pairs(&prompt_slots);
     progress(Progress::AgentRunning {
@@ -109,43 +116,18 @@ pub fn run_review(
         total: 1,
     });
 
-    let mut output: ReviewOutput =
-        serde_json::from_value(result.data).map_err(|e| ReviewError::PipelineFailure {
-            message: format!("output deserialize: {e}"),
-        })?;
+    // Validate against the embedded core contract.
+    ContractValidator::new()
+        .validate(&result.data)
+        .map_err(|errors| ReviewError::ContractViolation { errors })?;
 
-    reconcile_scores(&mut output);
-    for warning in validation::validate_output(&output) {
-        tracing::warn!(rule = %warning.rule, "{}", warning.message);
-    }
-
-    Ok(output)
+    Ok(ReviewDocument::from_value(result.data))
 }
 
-fn reconcile_scores(output: &mut ReviewOutput) {
-    let mean = match output.mean_grade_score() {
-        Some(m) => (m * 10.0).round() / 10.0,
-        None => output.overall_score,
-    };
-    let needs_fix = (output.summary.overall_score - output.overall_score).abs()
-        > MEAN_DRIFT_TOLERANCE
-        || (output.summary.overall_score - mean).abs() > MEAN_DRIFT_TOLERANCE;
-    if needs_fix {
-        tracing::warn!(
-            rule = "V1",
-            "score reconciled: summary={} top_level={} → {mean}",
-            output.summary.overall_score,
-            output.overall_score
-        );
-        output.summary.overall_score = mean;
-        output.overall_score = mean;
-    }
-}
-
-/// Render the markdown report for a validated review output.
-pub fn render_report(output: &ReviewOutput, template_dir: &Path) -> Result<String, ReviewError> {
-    let template = read_template(&pack::report_path(template_dir))?;
-    let report_slots = slots::build_report_slots(output);
+/// Render the markdown report for a validated review document.
+pub fn render_report(doc: &ReviewDocument, pack_dir: &Path) -> Result<String, ReviewError> {
+    let template = read_template(&pack::report_path(pack_dir))?;
+    let report_slots = slots::build_report_slots(doc, pack_dir);
     let slots_vec = slots::slots_as_pairs(&report_slots);
     TemplateRenderer::render(&template, &slots_vec).map_err(map_pipeline_error)
 }
@@ -153,6 +135,38 @@ pub fn render_report(output: &ReviewOutput, template_dir: &Path) -> Result<Strin
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
+
+/// Validate serialized input against the Pack's `schemas/review-input.json`.
+/// Skips validation if the schema file does not exist (optional per Pack).
+fn validate_input(input: &ReviewInput, pack_dir: &Path) -> Result<(), ReviewError> {
+    let schema_path = pack::input_schema_path(pack_dir);
+    let schema_text = match std::fs::read_to_string(&schema_path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(ReviewError::Io(e)),
+    };
+    let schema: serde_json::Value =
+        serde_json::from_str(&schema_text).map_err(|e| ReviewError::InputValidationFailed {
+            errors: vec![format!("invalid review-input.json: {e}")],
+        })?;
+    let input_value =
+        serde_json::to_value(input).map_err(|e| ReviewError::InputValidationFailed {
+            errors: vec![format!("input serialize: {e}")],
+        })?;
+    let validator =
+        jsonschema::validator_for(&schema).map_err(|e| ReviewError::InputValidationFailed {
+            errors: vec![format!("invalid schema: {e}")],
+        })?;
+    let errors: Vec<String> = validator
+        .iter_errors(&input_value)
+        .map(|e| e.to_string())
+        .collect();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(ReviewError::InputValidationFailed { errors })
+    }
+}
 
 /// Build an `AgentRunner` from the resolved config and review input.
 pub fn build_agent_runner(config: &DkConfig, input: &ReviewInput) -> AgentRunner {
@@ -287,5 +301,21 @@ mod tests {
             slot: "bar".to_string(),
         };
         assert_eq!(map_pipeline_error(e).code(), "DK_TEMPLATE_SLOT");
+    }
+
+    #[test]
+    fn input_validation_failed_code() {
+        let e = ReviewError::InputValidationFailed {
+            errors: vec!["missing working_dir".to_string()],
+        };
+        assert_eq!(e.code(), "DK_INPUT_VALIDATION");
+    }
+
+    #[test]
+    fn contract_violation_code() {
+        let e = ReviewError::ContractViolation {
+            errors: vec!["missing verdict".to_string()],
+        };
+        assert_eq!(e.code(), "DK_CONTRACT_VIOLATION");
     }
 }

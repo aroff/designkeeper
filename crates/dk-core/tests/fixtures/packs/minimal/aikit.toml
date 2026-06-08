@@ -1,0 +1,5 @@
+[package]
+name = "minimal"
+version = "1.0.0"
+description = "Minimal fixture pack for testing (alpha/beta dimensions, high/low severities)"
+authors = ["DesignKeeper"]

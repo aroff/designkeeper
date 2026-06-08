@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://designkeeper.dev/schemas/minimal/review-input.json",
+  "type": "object",
+  "required": ["working_dir"],
+  "additionalProperties": false,
+  "properties": {
+    "working_dir": { "type": "string", "minLength": 1 },
+    "target": { "type": "string" },
+    "change_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "base_ref": { "type": "string" },
+        "head_ref": { "type": "string" },
+        "diff_stat": { "type": "string" }
+      }
+    },
+    "focus": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "project_hints": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "style_guide": { "type": "string" },
+        "contributing": { "type": "string" },
+        "architecture_docs": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "options": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_findings": { "type": "integer", "minimum": 1, "maximum": 50 },
+        "include_dimensions": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["alpha", "beta"] }
+        }
+      }
+    }
+  }
+}

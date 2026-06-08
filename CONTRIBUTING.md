@@ -21,7 +21,11 @@ External dependencies worth knowing:
 
 **`--template`** — required flag on `dk review` and `dk check`. No default; the user always names the pack explicitly.
 
-**Response pipeline** — `dk` builds a prompt (methodology + target + schema slots), hands it to the agent, extracts the JSON block, validates against the pack's output schema, retries up to 2 times on failure.
+**Response pipeline** — `dk` builds a prompt (methodology + target + schema slots), hands it to the agent, extracts the JSON block, validates against the pack's output schema, retries up to 2 times on failure, then validates against the embedded core contract (below).
+
+**Core contract** — `crates/dk-core/schemas/dk-core-contract-v1.json`, embedded at compile time. After a Pack's output schema validates the agent response, `dk-core` additionally validates it against this contract, the minimal cross-Pack shape every review document must satisfy (`summary.verdict`, `summary.overall_score`, `summary.one_paragraph`, `overall_score`, `grades`, `findings`, `suggested_next_steps`, …). `dk-core` carries **no** rubric enums: dimensions and severities are arbitrary Pack-defined strings, preserved losslessly in `ReviewDocument`. A Pack whose schema is not a superset of the contract fails with `DK_CONTRACT_VIOLATION` — that is a Pack authoring error. See [ADR-0004](docs/adr/0004-template-agnostic-core.md).
+
+**Fixture packs** — `dk-core` unit and integration tests never depend on the official `templates/default` or `templates/structural` packs. They use synthetic packs under `crates/dk-core/tests/fixtures/packs/` (`minimal`: `alpha`/`beta` dimensions, `high`/`low` severities; `custom`: `x`/`y`/`z`, `critical`/`info`), copied into a tempdir via `testutil::copy_fixture_pack(name, dest)`.
 
 **Control file** — `dk.toml`, walked up from CWD. Fields: `[scan]` (extensions, ignore_patterns), `[output]` (format), `[agent]` (agent, model). No `[templates]` section — pack selection is per-command.
 

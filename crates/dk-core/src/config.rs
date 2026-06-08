@@ -16,7 +16,6 @@ pub struct DkConfig {
     pub scan: ScanConfig,
     pub output: OutputConfig,
     pub agent: AgentConfig,
-    pub templates: TemplatesConfig,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -56,11 +55,6 @@ pub struct AgentConfig {
     pub model: Option<String>,
     pub timeout_secs: Option<u64>,
     pub max_retries: Option<u32>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TemplatesConfig {
-    pub pack: String,
 }
 
 #[derive(Debug, Error)]
@@ -114,9 +108,6 @@ pub fn default_config() -> DkConfig {
             timeout_secs: None,
             max_retries: None,
         },
-        templates: TemplatesConfig {
-            pack: "default".to_string(),
-        },
     }
 }
 
@@ -154,8 +145,6 @@ struct RawConfig {
     output: Option<RawOutput>,
     #[serde(default)]
     agent: Option<RawAgent>,
-    #[serde(default)]
-    templates: Option<RawTemplates>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -179,12 +168,6 @@ struct RawAgent {
     model: Option<String>,
     timeout_secs: Option<u64>,
     max_retries: Option<u32>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawTemplates {
-    pack: Option<String>,
 }
 
 impl RawConfig {
@@ -214,11 +197,6 @@ impl RawConfig {
             cfg.agent.model = agent.model.filter(|m| !m.trim().is_empty());
             cfg.agent.timeout_secs = agent.timeout_secs;
             cfg.agent.max_retries = agent.max_retries;
-        }
-        if let Some(templates) = self.templates {
-            if let Some(pack) = templates.pack {
-                cfg.templates.pack = pack;
-            }
         }
         cfg
     }
@@ -257,9 +235,6 @@ format = "json"
 [agent]
 agent = "codex"
 model = "gpt-5"
-
-[templates]
-pack = "https://example.com/pack"
 "#,
         )
         .unwrap();
@@ -270,7 +245,18 @@ pack = "https://example.com/pack"
         assert_eq!(cfg.output.sarif_path, None);
         assert_eq!(cfg.agent.agent, "codex");
         assert_eq!(cfg.agent.model.as_deref(), Some("gpt-5"));
-        assert_eq!(cfg.templates.pack, "https://example.com/pack");
+    }
+
+    #[test]
+    fn templates_section_causes_parse_error() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("dk.toml"),
+            "[templates]\npack = \"default\"\n",
+        )
+        .unwrap();
+        let err = resolve_config(dir.path()).unwrap_err();
+        assert_eq!(err.code(), "DK_CONFIG_PARSE");
     }
 
     #[test]

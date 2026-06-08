@@ -8,9 +8,7 @@ use cli_framework::spec::value::ArgValue;
 
 use dk_core::config::{resolve_config, DkConfig, OutputFormat};
 use dk_core::pack_store;
-use dk_core::{
-    ChangeContext, Dimension, FocusArea, ReviewInput, ReviewOptions, DEFAULT_MAX_FINDINGS,
-};
+use dk_core::{ChangeContext, ReviewInput, ReviewOptions, DEFAULT_MAX_FINDINGS};
 
 pub fn current_dir() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
@@ -145,13 +143,11 @@ pub fn map_input(
     let target = get_str(args, "path").map(str::to_string).or(git_target);
 
     // `focus` is Cardinality::Repeated — arrives as ArgValue::List([ArgValue::Enum(...), ...])
-    let focus = match args.get("focus") {
+    let focus: Vec<String> = match args.get("focus") {
         Some(ArgValue::List(items)) => items
             .iter()
             .map(|v| match v {
-                ArgValue::Enum(s) | ArgValue::Str(s) => {
-                    FocusArea::parse(s).ok_or_else(|| format!("invalid --focus value: {s}"))
-                }
+                ArgValue::Enum(s) | ArgValue::Str(s) => Ok(s.clone()),
                 _ => Err("invalid --focus value".to_string()),
             })
             .collect::<Result<Vec<_>, _>>()?,
@@ -165,12 +161,16 @@ pub fn map_input(
         _ => DEFAULT_MAX_FINDINGS,
     };
 
+    // include-dimensions: comma-separated list of dimension strings; no enum validation.
     let include_dimensions = {
-        let dims = parse_comma_list(
-            get_str(args, "include-dimensions"),
-            "--include-dimensions",
-            Dimension::parse,
-        )?;
+        let dims: Vec<String> = match get_str(args, "include-dimensions") {
+            None => vec![],
+            Some(s) => s
+                .split(',')
+                .filter(|x| !x.is_empty())
+                .map(str::to_string)
+                .collect(),
+        };
         if dims.is_empty() {
             None
         } else {
@@ -189,20 +189,6 @@ pub fn map_input(
             include_dimensions,
         },
     })
-}
-
-fn parse_comma_list<T, F>(arg: Option<&str>, flag_name: &str, parse: F) -> Result<Vec<T>, String>
-where
-    F: Fn(&str) -> Option<T>,
-{
-    match arg {
-        None => Ok(vec![]),
-        Some(s) => s
-            .split(',')
-            .filter(|x| !x.is_empty())
-            .map(|x| parse(x).ok_or_else(|| format!("invalid {flag_name} value: {x}")))
-            .collect(),
-    }
 }
 
 /// `--description` accepts a file path (if it exists) or raw text (AC #19).
@@ -318,39 +304,32 @@ mod tests {
         assert_eq!(cc.title.as_deref(), Some("T"));
         assert_eq!(cc.description.as_deref(), Some("raw body"));
         assert_eq!(input.focus.len(), 2);
+        assert_eq!(input.focus[0], "security");
+        assert_eq!(input.focus[1], "concurrency");
         assert_eq!(input.options.max_findings, 10);
-    }
-
-    #[test]
-    fn map_input_rejects_bad_focus() {
-        let cwd = std::env::temp_dir();
-        assert!(map_input(
-            &args(&[(
-                "focus",
-                ArgValue::List(vec![ArgValue::Enum("nope".to_string())])
-            )]),
-            &cwd,
-            &default_config()
-        )
-        .is_err());
-    }
-
-    #[test]
-    fn map_input_include_dimensions_rejects_invalid() {
-        let cwd = std::env::temp_dir();
-        assert!(map_input(
-            &args(&[("include-dimensions", str_val("nope"))]),
-            &cwd,
-            &default_config()
-        )
-        .is_err());
     }
 
     #[test]
     fn map_input_include_dimensions_valid() {
         let cwd = std::env::temp_dir();
         let input = map_input(
-            &args(&[("include-dimensions", str_val("design,tests"))]),
+            &args(&[("include-dimensions", str_val("alpha,beta"))]),
+            &cwd,
+            &default_config(),
+        )
+        .unwrap();
+        let dims = input.options.include_dimensions.unwrap();
+        assert_eq!(dims.len(), 2);
+        assert_eq!(dims[0], "alpha");
+        assert_eq!(dims[1], "beta");
+    }
+
+    #[test]
+    fn map_input_include_dimensions_arbitrary_strings() {
+        let cwd = std::env::temp_dir();
+        // Pack-agnostic: any string is accepted (schema validates at review time)
+        let input = map_input(
+            &args(&[("include-dimensions", str_val("custom-dim,other"))]),
             &cwd,
             &default_config(),
         )
