@@ -117,6 +117,35 @@ assert_rc 1 "review with unknown template fails" \
 assert_contains "DK_PACK_NOT_INSTALLED" "review unknown template emits DK_PACK_NOT_INSTALLED" \
   -- bash -c 'cd "$1" && "$2" review --template nonexistent-pack . 2>&1' _ "$WORK" "$BIN"
 
+note "template-agnostic pipeline: structural pack with a mock agent"
+# AC-2: `dk check --template structural` with a mock agent returning structural
+# Pack vocabulary must reach a verdict (exit 0 approve / 1 request_changes),
+# NOT fail with a pipeline error (exit 2). Proves the Pack-agnostic deserialize
+# path: structural dimensions/severities are no longer rejected by Rust enums.
+MOCKBIN="$WORK/mockbin"
+mkdir -p "$MOCKBIN"
+cat > "$MOCKBIN/claude" <<'MOCK'
+#!/usr/bin/env bash
+# Mock claude: drain the prompt on stdin, then emit one `--output-format json`
+# result line whose `result` is a structural review document (alpha/beta-style
+# Pack vocabulary that the deleted Rust enums could never have parsed).
+cat >/dev/null
+cat <<'JSON'
+{"type":"result","result":"{\"summary\":{\"verdict\":\"approve\",\"overall_score\":8.5,\"structure_score\":8.5,\"complexity_score\":8.5,\"expressiveness_score\":8.5,\"one_paragraph\":\"Structure is sound; layers are clean and helpers are reused.\"},\"grades\":{\"file_decomposition\":{\"score\":9,\"rationale\":\"Files are small and cohesive.\"},\"abstraction_quality\":{\"score\":8,\"rationale\":\"Abstractions match the domain.\"}},\"overall_score\":8.5,\"good_things\":[\"Clear module boundaries.\"],\"findings\":[],\"limitations\":[],\"suggested_next_steps\":[\"Keep the current decomposition as the codebase grows.\"]}","session_id":"mock"}
+JSON
+MOCK
+chmod +x "$MOCKBIN/claude"
+
+assert_rc 0 "check --template structural (mock approve) exits 0 not pipeline error" \
+  -- bash -c 'cd "$1" && PATH="$2:$PATH" "$3" check --template structural --agent claude .' \
+     _ "$WORK" "$MOCKBIN" "$BIN"
+
+# AC-12 sanity: the same mock through `review --format sarif` yields Pack-derived
+# rules (the structural dimension keys), with no hardcoded default dimensions.
+assert_contains '"id": "file_decomposition"' "sarif rules derive from pack dimensions" \
+  -- bash -c 'cd "$1" && PATH="$2:$PATH" "$3" review --template structural --agent claude --output-format sarif .' \
+     _ "$WORK" "$MOCKBIN" "$BIN"
+
 note "mcp serve (stdio) exposes review as a tool"
 TOOLS="$(printf '%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}}' \

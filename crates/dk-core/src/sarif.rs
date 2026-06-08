@@ -31,7 +31,7 @@ pub struct SarifRunMeta {
 pub fn to_sarif(doc: &ReviewDocument, meta: &SarifRunMeta, pack_dir: &Path) -> Sarif {
     let severity_order = read_severity_order(pack_dir);
     let findings = doc.findings();
-    let rules = dimension_rules_from_findings(&findings);
+    let rules = dimension_rules(&findings, doc.raw()["grades"].as_object());
     let results: Vec<SarifResult> = findings
         .iter()
         .map(|f| finding_to_result(f, &severity_order))
@@ -96,10 +96,23 @@ pub fn to_sarif(doc: &ReviewDocument, meta: &SarifRunMeta, pack_dir: &Path) -> S
         .build()
 }
 
-/// Collect unique dimension strings from findings and emit one SARIF rule per dimension.
-fn dimension_rules_from_findings(findings: &[Finding]) -> Vec<ReportingDescriptor> {
-    let mut seen = std::collections::BTreeSet::new();
-    let mut rules = Vec::new();
+/// Collect unique dimension strings seen across `findings[].dimension` and the
+/// `grades` object keys, and emit one SARIF rule per dimension. The rule id is
+/// the raw Pack-defined dimension string; the label is a humanized form.
+fn dimension_rules(
+    findings: &[Finding],
+    grades: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Vec<ReportingDescriptor> {
+    // BTreeSet gives a deterministic (lexicographic) rule ordering.
+    let mut dimensions = std::collections::BTreeSet::new();
+    for f in findings {
+        dimensions.insert(f.dimension.clone());
+    }
+    if let Some(grades) = grades {
+        for key in grades.keys() {
+            dimensions.insert(key.clone());
+        }
+    }
 
     let mut rule_props_map: BTreeMap<String, serde_json::Value> = BTreeMap::new();
     rule_props_map.insert("dk/category".to_string(), serde_json::json!("code-review"));
@@ -107,21 +120,35 @@ fn dimension_rules_from_findings(findings: &[Finding]) -> Vec<ReportingDescripto
         .additional_properties(rule_props_map)
         .build();
 
-    for f in findings {
-        if seen.insert(f.dimension.clone()) {
-            let rule = ReportingDescriptor::builder()
-                .id(f.dimension.clone())
+    dimensions
+        .into_iter()
+        .map(|dimension| {
+            ReportingDescriptor::builder()
+                .id(dimension.clone())
                 .short_description(
                     MultiformatMessageString::builder()
-                        .text(f.dimension.clone())
+                        .text(humanize_dimension(&dimension))
                         .build(),
                 )
                 .properties(rule_props.clone())
-                .build();
-            rules.push(rule);
-        }
-    }
-    rules
+                .build()
+        })
+        .collect()
+}
+
+/// Humanize a dimension key for display: `abstraction_quality` → `Abstraction Quality`.
+fn humanize_dimension(dimension: &str) -> String {
+    dimension
+        .split('_')
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Map severity string to SARIF level using Pack schema order.
@@ -413,6 +440,9 @@ mod tests {
 
     #[test]
     fn test_dimension_rules_dynamic_from_findings() {
+        // AC-12: rules derive from the union of finding dimensions and grade
+        // keys — for approve.json that is exactly "alpha" and "beta" (Pack
+        // vocabulary), with no hardcoded default dimension names.
         let pack_dir = tempdir().unwrap();
         copy_fixture_pack("minimal", pack_dir.path());
         let doc = load_doc("approve.json");
@@ -424,9 +454,8 @@ mod tests {
             .rules
             .as_ref()
             .expect("rules should be present");
-        // approve.json has 1 finding with dimension "alpha"
-        assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0].id, "alpha");
+        let ids: Vec<&str> = rules.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec!["alpha", "beta"]);
     }
 
     #[test]

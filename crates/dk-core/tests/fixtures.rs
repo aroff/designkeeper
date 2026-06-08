@@ -190,6 +190,146 @@ fn end_to_end_run_review_with_recorded_response() {
     assert!(!report.contains("{{grades_table}}"));
 }
 
+// ---- AC-5: a third Pack with custom vocabulary works with no Rust change ----
+
+/// A mock agent response for the `custom` Pack: dimensions x/y/z, severities
+/// critical/info. None of these strings ever existed in the deleted Rust enums.
+fn custom_agent_response() -> String {
+    let json = r#"{
+  "summary": {
+    "verdict": "request_changes",
+    "overall_score": 5.0,
+    "structure_health": "needs work",
+    "one_paragraph": "Custom-pack review: dimension z regressed and needs attention before merge."
+  },
+  "grades": {
+    "x": { "score": 7, "rationale": "X dimension is acceptable." },
+    "y": { "score": 6, "rationale": "Y dimension has minor issues." },
+    "z": { "not_evaluated": true, "rationale": "Z could not be assessed from the diff." }
+  },
+  "overall_score": 5.0,
+  "good_things": ["X dimension is well structured."],
+  "findings": [
+    {
+      "id": "x-001",
+      "dimension": "x",
+      "severity": "critical",
+      "location": "src/lib.rs:10",
+      "observation": "A critical-severity problem in dimension x.",
+      "why_it_matters": "It blocks merge under the custom rubric.",
+      "recommended_action": "Address before merging."
+    },
+    {
+      "id": "y-001",
+      "dimension": "y",
+      "severity": "info",
+      "location": "src/lib.rs:20",
+      "observation": "An informational note in dimension y.",
+      "why_it_matters": "Worth knowing but not blocking.",
+      "recommended_action": "Consider when convenient."
+    }
+  ],
+  "limitations": ["Did not run the full suite."],
+  "suggested_next_steps": ["Fix the critical x finding first."]
+}"#;
+    format!("Here is the custom review.\n\n```json\n{json}\n```\n")
+}
+
+#[test]
+fn end_to_end_run_review_with_custom_pack() {
+    let pack_dir = tempfile::tempdir().unwrap();
+    copy_fixture_pack("custom", pack_dir.path());
+    let wd = tempfile::tempdir().unwrap();
+    std::fs::write(wd.path().join("lib.rs"), "pub fn x() {}").unwrap();
+
+    let (runner, _) = AgentRunner::with_mock(vec![Ok(custom_agent_response())]);
+    let doc = review::run_review(
+        input_for(wd.path()),
+        &default_config(),
+        pack_dir.path(),
+        runner,
+        &|_| {},
+    )
+    .expect("custom-pack review succeeds with no Rust change");
+
+    assert_eq!(doc.verdict(), Some(Verdict::RequestChanges));
+    // Custom severities/dimensions survive the lossless document path.
+    let findings = doc.findings();
+    assert_eq!(findings.len(), 2);
+    assert!(findings
+        .iter()
+        .any(|f| f.dimension == "x" && f.severity == "critical"));
+    assert!(findings
+        .iter()
+        .any(|f| f.dimension == "y" && f.severity == "info"));
+
+    // Report renders Pack vocabulary and the auto-exposed extra summary field.
+    let report = review::render_report(&doc, pack_dir.path()).unwrap();
+    assert!(report.contains("Custom review grade report"));
+    assert!(!report.contains("{{grades_table}}"));
+}
+
+#[test]
+fn run_review_rejects_input_failing_pack_schema() {
+    // AC-8: include_dimensions value not allowed by the Pack input schema fails
+    // with DK_INPUT_VALIDATION before the agent is ever invoked.
+    let pack_dir = tempfile::tempdir().unwrap();
+    copy_fixture_pack("custom", pack_dir.path());
+    let wd = tempfile::tempdir().unwrap();
+    std::fs::write(wd.path().join("lib.rs"), "pub fn x() {}").unwrap();
+
+    let mut input = input_for(wd.path());
+    input.options.include_dimensions = Some(vec!["alpha".to_string()]); // not in x/y/z
+
+    // Empty mock queue: if the agent were invoked, run() would panic/fail —
+    // proving validation happens before invocation.
+    let (runner, _) = AgentRunner::with_mock(vec![]);
+    let err =
+        review::run_review(input, &default_config(), pack_dir.path(), runner, &|_| {}).unwrap_err();
+    assert_eq!(err.code(), "DK_INPUT_VALIDATION");
+}
+
+#[test]
+fn run_review_rejects_output_missing_contract_field() {
+    // AC-9: output passes the Pack schema (summary.verdict is optional there for
+    // this fixture) but violates the embedded core contract → DK_CONTRACT_VIOLATION.
+    let pack_dir = tempfile::tempdir().unwrap();
+    copy_fixture_pack("custom", pack_dir.path());
+    let wd = tempfile::tempdir().unwrap();
+    std::fs::write(wd.path().join("lib.rs"), "pub fn x() {}").unwrap();
+
+    // Loosen the Pack output schema so summary.verdict is NOT required, letting a
+    // verdict-less document pass the Pack gate and reach the core contract gate.
+    let schema_path = pack_dir.path().join("schemas/review.json");
+    let mut schema: Value =
+        serde_json::from_str(&std::fs::read_to_string(&schema_path).unwrap()).unwrap();
+    schema["properties"]["summary"]["required"] =
+        serde_json::json!(["overall_score", "one_paragraph"]);
+    std::fs::write(&schema_path, serde_json::to_string_pretty(&schema).unwrap()).unwrap();
+
+    let response = r#"```json
+{
+  "summary": { "overall_score": 8.0, "one_paragraph": "Looks fine but has no verdict." },
+  "grades": { "x": { "score": 8, "rationale": "Good." } },
+  "overall_score": 8.0,
+  "good_things": [],
+  "findings": [],
+  "limitations": [],
+  "suggested_next_steps": ["Ship it."]
+}
+```"#;
+    let (runner, _) = AgentRunner::with_mock(vec![Ok(response.to_string())]);
+    let err = review::run_review(
+        input_for(wd.path()),
+        &default_config(),
+        pack_dir.path(),
+        runner,
+        &|_| {},
+    )
+    .unwrap_err();
+    assert_eq!(err.code(), "DK_CONTRACT_VIOLATION");
+}
+
 #[test]
 fn run_review_template_not_found() {
     let empty = tempfile::tempdir().unwrap();

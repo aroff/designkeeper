@@ -1,0 +1,5 @@
+[package]
+name = "custom"
+version = "1.0.0"
+description = "Third fixture pack for AC-5 (x/y/z dimensions, critical/info severities)"
+authors = ["DesignKeeper"]
