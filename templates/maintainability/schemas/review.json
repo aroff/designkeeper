@@ -1,0 +1,190 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://designkeeper.dev/schemas/maintainability/output.schema.json",
+  "title": "MaintainabilityReviewOutput",
+  "description": "Structured agent output for dk maintainability review. Grades seven flat, non-negotiable maintainability standards from the Thermo-Nuclear Code Quality Review framework. The flat (ungrouped) dimension list and the verdict/severity enums are chosen to project mechanically onto Newton assessment-v1 (scores ×10).",
+  "type": "object",
+  "required": [
+    "summary",
+    "grades",
+    "overall_score",
+    "good_things",
+    "findings",
+    "limitations",
+    "suggested_next_steps"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "summary": {
+      "type": "object",
+      "required": ["verdict", "overall_score", "one_paragraph"],
+      "additionalProperties": false,
+      "properties": {
+        "verdict": {
+          "type": "string",
+          "enum": ["approve", "approve_with_comments", "request_changes", "reject"],
+          "description": "reject: overall<4 or any critical. request_changes: overall 4-5 or any high. approve_with_comments: overall 6-7. approve: overall>=8. Enum is identical to Newton assessment-v1 verdict (passthrough)."
+        },
+        "overall_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10,
+          "description": "Mean of evaluated dimensions with critical penalty applied (-0.5 per dimension scored <4, floor 0). Projects to Newton overall_score as round(value * 10)."
+        },
+        "one_paragraph": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
+          "description": "Summary of maintainability health, the single biggest code-judo opportunity (taken or missed), and any critical penalty applied."
+        }
+      }
+    },
+    "grades": {
+      "type": "object",
+      "description": "Per-dimension scores 0-10 with rationale. All seven maintainability dimensions. Projects to Newton scores[] (one entry per evaluated dimension, score ×10).",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/$defs/grade_entry"
+      },
+      "propertyNames": {
+        "$ref": "#/$defs/dimension"
+      }
+    },
+    "overall_score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 10,
+      "description": "Must match summary.overall_score (post-penalty rounded mean)."
+    },
+    "good_things": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Structural choices that genuinely improve maintainability and are worth retaining."
+    },
+    "findings": {
+      "type": "array",
+      "maxItems": 50,
+      "items": { "$ref": "#/$defs/finding" }
+    },
+    "limitations": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "What could not be verified (generated code skipped, partial diff, no architectural docs, etc.)."
+    },
+    "suggested_next_steps": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 1,
+      "description": "Ordered actions for the author, critical findings first."
+    }
+  },
+  "$defs": {
+    "dimension": {
+      "type": "string",
+      "enum": [
+        "simplification_ambition",
+        "file_decomposition",
+        "branching_discipline",
+        "abstraction_economy",
+        "boundary_clarity",
+        "canonical_placement",
+        "orchestration_atomicity"
+      ]
+    },
+    "grade_entry": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["score", "rationale"],
+          "additionalProperties": false,
+          "properties": {
+            "score": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 10
+            },
+            "rationale": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["not_evaluated", "rationale"],
+          "additionalProperties": false,
+          "properties": {
+            "not_evaluated": { "type": "boolean", "const": true },
+            "rationale": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            }
+          }
+        }
+      ]
+    },
+    "finding": {
+      "type": "object",
+      "description": "An actionable critique. Carries the mandatory directional triple (observation/why_it_matters/recommended_action) so it projects directly to a Newton observation. Its dimension MUST be an evaluated (scored) dimension, never a not_evaluated one — this preserves Newton's invariant that every observation dimension appears in scores[].",
+      "required": [
+        "id",
+        "dimension",
+        "severity",
+        "location",
+        "observation",
+        "why_it_matters",
+        "recommended_action"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+          "description": "Stable slug, e.g. simplification-ambition-001."
+        },
+        "dimension": { "$ref": "#/$defs/dimension" },
+        "severity": {
+          "type": "string",
+          "enum": ["critical", "high", "medium", "low"],
+          "description": "critical: score 0-3 (blocks merge, quality penalty). high: score 4-5 (request changes). medium: score 6-7 (approve with comments). low: score 8 (nit-level). Enum is identical to Newton observation severity (passthrough)."
+        },
+        "location": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "path/to/file.ext:42-48, module name, or change_scope (whole diff). Newton projection parses 'path:range' into a location object {path, range}."
+        },
+        "observation": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 1000,
+          "description": "WHAT is wrong or suboptimal."
+        },
+        "why_it_matters": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 500,
+          "description": "WHY it matters — sharpens the direction."
+        },
+        "recommended_action": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 1000,
+          "description": "The DIRECTION — what to change. The gradient vector."
+        },
+        "evidence": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Optional short excerpt or symbol reference supporting the observation. Newton projection wraps this into observation.evidence[]."
+        },
+        "suggested_patch": {
+          "type": "string",
+          "maxLength": 2000,
+          "description": "Optional unified diff or code snippet showing the fix."
+        }
+      }
+    }
+  }
+}

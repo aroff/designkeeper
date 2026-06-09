@@ -7,3 +7,8 @@ source = "aroff/designkeeper/templates/default"
 name = "structural"
 description = "Structural code quality review — Structure, Complexity, Expressiveness"
 source = "aroff/designkeeper/templates/structural"
+
+[[packs]]
+name = "maintainability"
+description = "Strict maintainability audit — ambitious structural simplification (code judo), file size, spaghetti growth, abstraction economy"
+source = "aroff/designkeeper/templates/maintainability"

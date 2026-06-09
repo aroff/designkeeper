@@ -83,6 +83,7 @@ A template pack defines the review rubric, prompt, output schema, and report for
 |---|---|---|
 | `default` | [Google Engineering Practices](https://github.com/google/eng-practices) — 13 dimensions (design, tests, naming, complexity, …) | Feature PRs, bug fixes, general code review |
 | `structural` | Structure · Complexity · Expressiveness — 9 sub-dimensions | Architecture changes, refactors, large new modules |
+| `maintainability` | Thermo-Nuclear maintainability audit — 7 flat dimensions, ambition-first ("code judo") | Strict pre-merge quality gates; Newton command-Grader use |
 
 ### Installing packs
 

@@ -1,0 +1,5 @@
+[package]
+name = "maintainability"
+version = "1.0.0"
+description = "Strict maintainability audit — ambitious structural simplification (code judo), file size, spaghetti growth, abstraction economy"
+authors = ["DesignKeeper"]
